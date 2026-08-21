@@ -70,7 +70,31 @@ jobs:
     environment: ${{ inputs.environment }}
 
     env:
+      # ---------------------------------------------------------------------
+      # azure/login authenticates the AZURE CLI. It does not configure Terraform.
+      #
+      # Terraform reads ARM_* environment variables, and needs them in two
+      # independent places:
+      #
+      #   the PROVIDER  - can also take subscription_id/tenant_id from tfvars, but
+      #                   has no client_id without ARM_CLIENT_ID
+      #   the BACKEND   - does NOT see the provider block at all. `use_oidc = true`
+      #                   in backend.hcl tells it HOW to authenticate, not AS WHOM.
+      #
+      # Missing them, `terraform init` fails before it does anything useful:
+      #
+      #   Error building ARM Config: 2 errors occurred:
+      #     * a Tenant ID must be configured when authenticating with OIDC
+      #     * a Client ID must be configured when authenticating with OIDC
+      #
+      # The OIDC token itself needs no wiring: the provider reads
+      # ACTIONS_ID_TOKEN_REQUEST_URL / _TOKEN, which GitHub sets automatically
+      # given `permissions: id-token: write`.
+      # ---------------------------------------------------------------------
       ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
     steps:
       - uses: actions/checkout@v4
