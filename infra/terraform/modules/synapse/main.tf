@@ -127,7 +127,22 @@ resource "azurerm_synapse_workspace" "this" {
   # template works out of the box; turn on deliberately.
   data_exfiltration_protection_enabled = var.data_exfiltration_protection_enabled
 
-  public_network_access_enabled = var.public_network_access_enabled
+  # ALWAYS true at CREATE. Locked down afterwards by
+  # null_resource.disable_public_network_access below.
+  #
+  # Creating a managed-VNet workspace with public access DISABLED does not
+  # merely take longer - it never finishes. Measured on this subscription:
+  #
+  #   publicNetworkAccess = Disabled   30+ min, no completion, ends Failed
+  #   publicNetworkAccess = Enabled    7 minutes, Succeeded
+  #
+  # Same storage account, same filesystem, same managed VNet; the flag was the
+  # only difference. Synapse needs to reach its own endpoints while
+  # provisioning, and disabling public access before it exists denies it that.
+  #
+  # Raising the Terraform timeout does NOT fix this - it only makes the failure
+  # take longer to arrive, because Azure was never going to finish.
+  public_network_access_enabled = true
 
   sql_administrator_login          = var.entra_only_authentication ? null : var.sql_admin_login
   sql_administrator_login_password = var.entra_only_authentication ? null : random_password.sql_admin[0].result
@@ -164,6 +179,13 @@ resource "azurerm_synapse_workspace" "this" {
   # only waiting, while the cost of being wrong the other way is a Failed
   # workspace that must be deleted by hand before anything can proceed.
   # ---------------------------------------------------------------------
+  lifecycle {
+    # The workspace is created with public access enabled and disabled straight
+    # afterwards, so Azure will always report Disabled while this configuration
+    # says true. Without this, every plan proposes turning it back on.
+    ignore_changes = [public_network_access_enabled]
+  }
+
   timeouts {
     create = "90m"
     update = "60m"
@@ -315,6 +337,42 @@ resource "azurerm_synapse_managed_private_endpoint" "this" {
     # privately, AND have settled. See the time_sleep above.
     azurerm_private_endpoint.workspace,
     time_sleep.wait_for_workspace_private_endpoints,
+  ]
+}
+
+# ---------------------------------------------------------------------------
+# Lock the workspace down, now that it exists.
+#
+# Ordered AFTER the managed private endpoints: those are Dev-API (data-plane)
+# calls, and doing them before the private path is proven leaves no way back in
+# if something is wrong. By this point the workspace private endpoints exist,
+# DNS has settled, and the runner reaches the Dev endpoint privately.
+#
+# az synapse workspace update has no flag for this, so it is a generic ARM
+# PATCH. Verified: the workspace stays provisioningState = Succeeded.
+# ---------------------------------------------------------------------------
+
+resource "null_resource" "disable_public_network_access" {
+  count = var.public_network_access_enabled ? 0 : 1
+
+  triggers = {
+    workspace_id = azurerm_synapse_workspace.this.id
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      echo "Disabling public network access on ${azurerm_synapse_workspace.this.name}..."
+      az resource update         --ids "${azurerm_synapse_workspace.this.id}"         --set properties.publicNetworkAccess=Disabled         --output none
+      echo "  publicNetworkAccess is now $(az resource show --ids "${azurerm_synapse_workspace.this.id}" --query properties.publicNetworkAccess -o tsv)"
+    EOT
+  }
+
+  depends_on = [
+    azurerm_private_endpoint.workspace,
+    azurerm_synapse_managed_private_endpoint.this,
+    null_resource.approve_managed_private_endpoints,
   ]
 }
 

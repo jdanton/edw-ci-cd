@@ -91,6 +91,48 @@ the wrong collation — failing would block every subsequent deployment.
 
 ---
 
+## Public network access: enabled at create, disabled after {#public-access-at-create}
+
+The workspace is created with `public_network_access_enabled = true` and locked
+down immediately afterwards by a `null_resource` that issues an ARM PATCH. That
+looks like a workaround. It is not optional.
+
+Measured on a real subscription, same storage account, same filesystem, same
+managed VNet, with the flag as the only difference:
+
+| `publicNetworkAccess` at create | Outcome |
+|---|---|
+| `Disabled` | 30+ minutes, never completes, ends `provisioningState = Failed` |
+| `Enabled` | **Succeeded in 7 minutes** |
+
+Synapse needs to reach its own endpoints while provisioning. Disabling public
+access before the workspace exists denies it that, and the failure is silent:
+Azure keeps returning `StatusCode=200` while making no progress, so Terraform
+eventually hits its own timeout and the abandoned workspace settles into
+`Failed`. The error you are then shown is
+
+```
+CreateWorkspaceError: An error has occured while creating the workspace.
+Correlation Id: ...
+```
+
+which says nothing about networking, and a `Failed` workspace cannot be
+repaired - it must be deleted before anything can proceed.
+
+**Raising the Terraform timeout does not fix this.** It only makes the failure
+take longer to arrive.
+
+The lockdown runs after the workspace private endpoints AND the managed private
+endpoints, so the private path is proven before the public one closes. Because
+Azure then reports `Disabled` while the configuration says `true`, the resource
+carries `ignore_changes = [public_network_access_enabled]` - without it every
+plan proposes turning public access back on.
+
+`az synapse workspace update` has no flag for this, hence the generic
+`az resource update --set properties.publicNetworkAccess=Disabled`.
+
+---
+
 ## The three external data sources
 
 One per lake filesystem, rather than one root data source. Two reasons:
