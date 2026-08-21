@@ -252,9 +252,37 @@ done
 pwsh -c '$PSVersionTable.PSVersion'    # must be 7.x
 ```
 
-The workflows install `sqlpackage`, `SqlServer`, `azure.datafactory.tools` and
-`azure.synapse.tools` on demand. Pre-installing saves two to three minutes per
-run:
+**The .NET SDK must already be installed — the workflows do not install it.**
+
+`actions/setup-dotnet` is deliberately not used. It does not detect an SDK
+installed by the distribution: on Ubuntu, apt installs to `/usr/lib/dotnet`
+with a symlink at `/usr/bin/dotnet`, while setup-dotnet hardcodes
+`/usr/share/dotnet` and tries to create it as the runner user:
+
+```
+mkdir: cannot create directory '/usr/share/dotnet': Permission denied
+Error: Failed to install dotnet, exit code: 1
+```
+
+Do **not** fix that by chowning `/usr/share/dotnet` — apt owns the .NET tree and
+root should keep it, and you would end up with two SDKs and a PATH-order
+question. `sql-cd.yml` instead asserts the installed version and fails with a
+clear message if it is missing or too old. The reasoning is written out in full
+at the top of the `build` job there.
+
+```bash
+sudo apt-get install -y dotnet-sdk-8.0
+dotnet --list-sdks        # expect 8.0.x or later
+```
+
+If you ran `sudo mkdir -p /usr/share/dotnet` while debugging this, remove the
+empty directory (`sudo rmdir /usr/share/dotnet`) — leaving it behind changes how
+`install-dotnet.sh` behaves if anyone reinstates the action.
+
+The workflows *do* install `sqlpackage`, `SqlServer`, `azure.datafactory.tools`
+and `azure.synapse.tools` on demand, into writable per-user locations
+(`~/.dotnet/tools` and the PowerShell `CurrentUser` scope). Pre-installing those
+saves two to three minutes per run:
 
 ```bash
 dotnet tool install --global microsoft.sqlpackage

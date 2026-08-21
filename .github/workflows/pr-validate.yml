@@ -42,6 +42,7 @@ concurrency:
 env:
   TERRAFORM_VERSION: '1.9.8'
   ADF_TOOLS_VERSION: '1.11.0'
+  DOTNET_MINIMUM_MAJOR: '8'
 
 jobs:
 
@@ -133,10 +134,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
+      # ---------------------------------------------------------------------
+      # NOT actions/setup-dotnet. See the long note in sql-cd.yml - on a
+      # self-hosted runner that already has the SDK from apt, setup-dotnet
+      # ignores it and hardcodes an install into /usr/share/dotnet, which the
+      # runner user cannot write.
+      # ---------------------------------------------------------------------
+      - name: Verify .NET SDK
+        run: |
+          set -euo pipefail
+          if ! command -v dotnet >/dev/null 2>&1; then
+            echo "::error::dotnet is not on PATH. Install it on the runner: sudo apt-get install -y dotnet-sdk-8.0"
+            exit 1
+          fi
+          sdk=$(dotnet --version)
+          echo "dotnet: $(command -v dotnet)  SDK: $sdk"
+          if [ "${sdk%%.*}" -lt "${DOTNET_MINIMUM_MAJOR}" ]; then
+            echo "::error::SDK $sdk found; Microsoft.Build.Sql needs .NET ${DOTNET_MINIMUM_MAJOR} or later."
+            exit 1
+          fi
 
       - name: dotnet build
         run: |

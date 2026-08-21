@@ -59,7 +59,7 @@ concurrency:
 
 env:
   TERRAFORM_VERSION: '1.9.8'
-  DOTNET_VERSION: '8.0.x'
+  DOTNET_MINIMUM_MAJOR: '8'
 
 jobs:
 
@@ -71,9 +71,54 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
+      # ---------------------------------------------------------------------
+      # WHY THERE IS NO actions/setup-dotnet HERE
+      # ---------------------------------------------------------------------
+      # setup-dotnet does not detect an SDK installed by the distribution. On
+      # Ubuntu, apt installs to /usr/lib/dotnet with a symlink at
+      # /usr/bin/dotnet; setup-dotnet hardcodes /usr/share/dotnet and tries to
+      # create it as the runner user:
+      #
+      #     mkdir: cannot create directory '/usr/share/dotnet': Permission denied
+      #     Error: Failed to install dotnet, exit code: 1
+      #
+      # Three ways out, and why this one:
+      #
+      #   chown /usr/share/dotnet     WRONG. apt owns the .NET tree and root
+      #                               should keep it. You would also end up with
+      #                               two SDKs and a PATH-order question.
+      #
+      #   DOTNET_INSTALL_DIR:         Works, and is the right answer if the same
+      #     ${{ runner.temp }}/dotnet workflow must also run on GitHub-hosted
+      #                               runners. Costs a ~200 MB download and
+      #                               ~40s on every run for an SDK that is
+      #                               already installed.
+      #
+      #   use what is installed       This platform builds ONLY on VNet-attached
+      #     and assert the version    self-hosted runners - every data-plane
+      #     <-- chosen                endpoint is private, so a hosted runner
+      #                               cannot deploy anyway. Nothing is
+      #                               downloaded, and a runner missing the SDK
+      #                               fails with a message that says so.
+      #
+      # If you fork this for a public-endpoint variant that uses hosted
+      # runners, restore setup-dotnet WITH the DOTNET_INSTALL_DIR env var.
+      # ---------------------------------------------------------------------
+      - name: Verify .NET SDK
+        run: |
+          set -euo pipefail
+          if ! command -v dotnet >/dev/null 2>&1; then
+            echo "::error::dotnet is not on PATH on this runner."
+            echo "::error::Install it: sudo apt-get install -y dotnet-sdk-8.0"
+            exit 1
+          fi
+          sdk=$(dotnet --version)
+          echo "dotnet: $(command -v dotnet)  SDK: $sdk"
+          if [ "${sdk%%.*}" -lt "${DOTNET_MINIMUM_MAJOR}" ]; then
+            echo "::error::SDK $sdk found; Microsoft.Build.Sql needs .NET ${DOTNET_MINIMUM_MAJOR} or later."
+            exit 1
+          fi
+          dotnet --list-sdks
 
       # TreatTSqlWarningsAsErrors is set in the .sqlproj, so an unresolved
       # reference - a procedure naming a column that does not exist - fails
