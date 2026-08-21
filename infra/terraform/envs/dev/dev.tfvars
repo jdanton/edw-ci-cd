@@ -188,3 +188,19 @@ tags = {
 
 # Deployment identity for this environment (bootstrap: deploy_principal_ids).
 deployer_principal_id = "73eb8ae2-62c8-44a2-aef6-a44361fdbcb9"
+
+# ---------------------------------------------------------------------------
+# Pinned so a rebuild does not depend on a previous environment finishing its
+# teardown.
+#
+# Deleting a managed-VNet Synapse workspace routinely takes 30-60 minutes, and
+# the workspace NAME is reserved for the whole of it. With the suffix left
+# random-but-held-in-state, a destroy/rebuild cycle reuses the same name and
+# blocks on that teardown - which stalled this environment for 40 minutes with
+# nothing to do but wait, since Azure puts a deny assignment on the managed
+# resource group so you cannot help it along.
+#
+# Pinning also makes names reproducible, which is worth having anyway: if you
+# lose Terraform state you need this value to import rather than recreate.
+# ---------------------------------------------------------------------------
+name_suffix = "65ri"
