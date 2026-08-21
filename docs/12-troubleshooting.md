@@ -647,6 +647,73 @@ half-configured state.
 
 ## Data Factory
 
+### `apply` hangs forever creating a managed private endpoint {#mpe-create-hangs}
+
+```
+module.datafactory.azurerm_data_factory_managed_private_endpoint.this["synapse-dev"]: Still creating... [13m30s elapsed]
+```
+
+Check Azure before assuming the endpoint is missing — in the case that
+produced this note it already existed and was perfectly healthy:
+
+```bash
+# NOTE the mpe- prefix. The Terraform key is "synapse-dev"; the ARM resource
+# is "mpe-synapse-dev". Querying the key alone returns a misleading 404.
+az rest --method get --url "https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>\
+/providers/Microsoft.DataFactory/factories/<adf>/managedVirtualNetworks/default\
+/managedPrivateEndpoints/mpe-synapse-dev?api-version=2018-06-01"
+```
+
+`provisioningState: Succeeded`, `connectionState: Pending` means the endpoint
+is fine and Terraform simply cannot see it. Now try the LIST call:
+
+```bash
+az datafactory managed-private-endpoint list \
+  --factory-name <adf> -g <rg> --managed-virtual-network-name default
+```
+
+If that returns **HTTP 500**:
+
+```
+InternalError: Sequence contains no elements
+  at System.Linq.Enumerable.First[TSource](IEnumerable`1 source)
+  at ManagedPrivateEndpointController.CreateManagedPrivateEndpointResponse(...)
+```
+
+then the resource provider is throwing while projecting its own endpoints into
+ARM responses. Endpoint **reads** go through GET and keep working; the
+**create** path polls LIST, so it retries a permanent 500 until the job times
+out. Existing endpoints are unaffected — only new ones hang.
+
+**Repair, without destroying anything.** The endpoints already exist, so stop
+trying to create them and adopt them instead:
+
+```bash
+terraform import \
+  'module.datafactory.azurerm_data_factory_managed_private_endpoint.this["synapse-dev"]' \
+  "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.DataFactory\
+/factories/<adf>/managedVirtualNetworks/default/managedPrivateEndpoints/mpe-synapse-dev"
+```
+
+Import uses GET, so it succeeds even while LIST is broken. The next plan sees
+the endpoints as present and never calls create.
+
+If the endpoint genuinely does not exist, create it by hand — this also takes
+the create path off Terraform's broken poll, and lands in ~45 seconds:
+
+```bash
+az rest --method put --url "<the URL above>" --headers "Content-Type=application/json" \
+  --body '{"properties":{"privateLinkResourceId":"<synapse workspace id>","groupId":"Dev"}}'
+```
+
+Synapse group IDs are case-sensitive: `Dev`, `Sql`, `SqlOnDemand`, `Web`.
+
+**Do not "fix" this by destroying the factory or the workspace.** Destroying a
+target is what orphans these endpoints in the first place: the ADF managed VNet
+keeps records pointing at a resource that no longer exists, and every
+subsequent apply hangs on them. See
+[#forcenew-null-drift](#forcenew-null-drift) for how that cycle started.
+
 ### Config CSV row has no effect
 
 `path` is relative to the artifact's **`properties`** node:
