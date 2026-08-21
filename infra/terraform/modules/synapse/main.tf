@@ -258,6 +258,23 @@ resource "azurerm_private_endpoint" "private_link_hub" {
 # prefer, manually - see docs/04-networking.md).
 # ---------------------------------------------------------------------------
 
+# A private endpoint is not usable the instant Terraform returns. The NIC, the
+# DNS zone group A record, and the workspace's own view of the approved
+# connection all settle independently, over tens of seconds.
+#
+# Creating the managed private endpoints immediately afterwards raced that, and
+# failed with a 403 that blames the caller's IP rather than the timing:
+#
+#   ClientIpAddressNotAuthorized: Client IP address 172.16.0.4 is not authorized
+#   to access private endpoint connection with link ID ... in workspace ...
+#
+# The IP was correct and the connection WAS approved - it simply had not
+# propagated. Same class of problem as the Entra RBAC waits elsewhere.
+resource "time_sleep" "wait_for_workspace_private_endpoints" {
+  depends_on      = [azurerm_private_endpoint.workspace]
+  create_duration = "90s"
+}
+
 resource "azurerm_synapse_managed_private_endpoint" "this" {
   for_each = local.managed_private_endpoints
 
@@ -267,8 +284,10 @@ resource "azurerm_synapse_managed_private_endpoint" "this" {
   subresource_name     = each.value.subresource_name
 
   depends_on = [
-    # Data-plane call: the Dev endpoint must resolve privately first.
+    # Data-plane call through the Dev endpoint: it must exist, resolve
+    # privately, AND have settled. See the time_sleep above.
     azurerm_private_endpoint.workspace,
+    time_sleep.wait_for_workspace_private_endpoints,
   ]
 }
 

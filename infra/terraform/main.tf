@@ -75,8 +75,11 @@ locals {
   filesystems = {
     raw = {
       description = "Immutable landing zone. Source-format files exactly as received, partitioned by source system and business date. Written only by ADF; never edited."
+      # LEAF paths only. ADLS creates parent directories implicitly, so
+      # declaring "nyctlc" as well as "nyctlc/yellow" is a race: whichever
+      # runs first creates both, and the other fails with
+      #   a resource with the ID ".../raw/nyctlc" already exists
       directories = [
-        "nyctlc",
         "nyctlc/yellow",
         "nyctlc/green",
         "nyctlc/reference",
@@ -85,8 +88,8 @@ locals {
     }
     curated = {
       description = "Conformed, typed, deduplicated Parquet produced by Synapse serverless CETAS. The contract between the lake and the warehouse."
+      # Leaf paths only - see the note on the raw filesystem.
       directories = [
-        "nyctlc",
         "nyctlc/yellow_trip",
         "nyctlc/taxi_zone",
       ]
@@ -288,6 +291,9 @@ module "sql" {
   private_endpoint_subnet_id    = module.network.private_endpoint_subnet_id
   private_dns_zone_ids          = module.network.private_dns_zone_ids
 
+  # Auditing is defined at the root (rbac.tf) so it can be ordered after the
+  # role assignment it depends on. See the comment there.
+  enable_auditing         = false
   audit_storage_endpoint  = module.storage.blob_endpoint
   enable_threat_detection = var.sql_enable_threat_detection
   security_alert_emails   = var.sql_security_alert_emails

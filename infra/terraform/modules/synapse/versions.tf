@@ -33,6 +33,12 @@ terraform {
     }
     # random_password for the SQL administrator that Entra-only auth does
     # not use but the API still demands at creation time.
+    # time_sleep, to let private endpoint + DNS propagation settle before the
+    # first data-plane call through the Dev endpoint.
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
+    }
     random = {
       source  = "hashicorp/random"
       version = "~> 3.6"

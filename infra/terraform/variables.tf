@@ -387,3 +387,38 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "sql_enable_auditing" {
+  description = "Enable Azure SQL extended auditing to the lake's logs. The policy is defined in rbac.tf, not modules/sql, because it must be ordered after the role assignment that grants the server identity blob access."
+  type        = bool
+  default     = true
+}
+
+variable "sql_audit_retention_days" {
+  description = "Retention for extended audit logs."
+  type        = number
+  default     = 90
+}
+
+variable "deployer_principal_id" {
+  description = <<-EOT
+    Object ID of the identity that runs Terraform, used for the grants it needs
+    on its own resources (blob data on the lake, secrets in Key Vault).
+
+    Set this to the environment's deployment service principal - bootstrap
+    output `deploy_principal_ids`. Leave null and it falls back to whoever is
+    running, via data.azurerm_client_config.
+
+    WHY IT IS A VARIABLE. With the fallback alone, the grants follow the CALLER:
+    plan from a laptop and Terraform proposes replacing them with your user
+    object ID, and an apply from a laptop would revoke the deployment
+    identity's access - breaking CI until the next pipeline run put it back.
+    Pinning it makes the assignment a property of the ENVIRONMENT rather than
+    of whoever last ran the tool.
+
+    A human who also needs this access should get it through the admin groups,
+    not by applying Terraform as themselves.
+  EOT
+  type        = string
+  default     = null
+}

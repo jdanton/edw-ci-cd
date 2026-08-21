@@ -66,13 +66,58 @@ resource "azurerm_role_assignment" "synapse_lake_contributor" {
 
 # The SQL server's managed identity writes extended audit logs to logs/.
 resource "azurerm_role_assignment" "sql_audit_logs" {
-  scope                            = module.storage.container_resource_ids["logs"]
+  # ACCOUNT scope, not the logs container.
+  #
+  # Container scope looks tighter and does not work: SQL auditing creates and
+  # manages its OWN container (sqldbauditlogs) and enumerates the account to do
+  # it. With a container-scoped grant, enabling the policy fails with
+  #
+  #   BlobAuditingInsufficientStorageAccountPermissions: Insufficient read or
+  #   write permissions on storage account '...'. Add permissions to the server
+  #   Identity to the storage account.
+  #
+  # which names the account, not the container, precisely because that is the
+  # scope it needs.
+  scope                            = module.storage.id
   role_definition_name             = "Storage Blob Data Contributor"
   principal_id                     = module.sql.principal_id
   principal_type                   = "ServicePrincipal"
   skip_service_principal_aad_check = true
 
-  description = "Azure SQL extended auditing target. Scoped to the logs filesystem only - the server has no business reading raw or curated."
+  description = "Azure SQL extended auditing. Needs account scope: the service creates its own sqldbauditlogs container."
+}
+
+# Role assignments take a couple of minutes to reach the storage data plane, and
+# the auditing policy calls that data plane the instant it is created.
+resource "time_sleep" "wait_for_sql_audit_rbac" {
+  depends_on      = [azurerm_role_assignment.sql_audit_logs]
+  create_duration = "60s"
+}
+
+# ---------------------------------------------------------------------------
+# Extended auditing lives HERE, not in modules/sql, and it has to.
+#
+# The policy depends on the role assignment above; the role assignment depends
+# on module.sql.principal_id. Putting the policy inside modules/sql would make
+# the module depend on a resource that depends on the module - a cycle, because
+# Terraform resolves dependencies at MODULE granularity.
+#
+# Same reason all the other cross-service RBAC is at the root. See the header.
+# ---------------------------------------------------------------------------
+resource "azurerm_mssql_server_extended_auditing_policy" "sql" {
+  count = var.sql_enable_auditing ? 1 : 0
+
+  server_id                       = module.sql.server_id
+  storage_endpoint                = module.storage.blob_endpoint
+  storage_account_subscription_id = var.subscription_id
+  retention_in_days               = var.sql_audit_retention_days
+  log_monitoring_enabled          = true
+
+  # No storage_account_access_key: the server's managed identity is used, which
+  # is the only option available anyway - the lake has shared_access_key_enabled
+  # = false.
+
+  depends_on = [time_sleep.wait_for_sql_audit_rbac]
 }
 
 # ---------------------------------------------------------------------------
@@ -155,10 +200,16 @@ resource "azurerm_synapse_role_assignment" "adf_synapse_user" {
 
 data "azurerm_client_config" "current" {}
 
+locals {
+  # Pinned per environment, falling back to the caller. See the long note on
+  # var.deployer_principal_id for why the fallback alone is not enough.
+  deployer_principal_id = coalesce(var.deployer_principal_id, data.azurerm_client_config.current.object_id)
+}
+
 resource "azurerm_role_assignment" "deployer_lake_contributor" {
   scope                            = module.storage.id
   role_definition_name             = "Storage Blob Data Contributor"
-  principal_id                     = data.azurerm_client_config.current.object_id
+  principal_id                     = local.deployer_principal_id
   skip_service_principal_aad_check = true
 
   description = "Terraform / CI deployment identity - creates filesystems, directories and seeds reference data."

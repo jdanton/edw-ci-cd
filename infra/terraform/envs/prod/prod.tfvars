@@ -135,3 +135,6 @@ tags = {
   criticality = "high"
   compliance  = "internal"
 }
+
+# Deployment identity for this environment (bootstrap: deploy_principal_ids).
+deployer_principal_id = "45db08c3-407d-4be5-b145-2361bdcc729b"

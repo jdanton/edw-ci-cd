@@ -91,6 +91,27 @@ if ($ConnectionPrefix) {
 
 $totalApproved = 0
 $totalPending  = 0
+$failures      = @()
+
+function Get-Connection {
+    param([string]$ResourceId, [string]$Query)
+
+    $raw = az network private-endpoint-connection list --id $ResourceId --query $Query --output json 2>$null
+
+    # Some resource types do not expose this sub-resource until the first
+    # connection exists; an empty result is normal, not an error.
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($raw)) { return @() }
+
+    $parsed = $raw | ConvertFrom-Json
+    if ($null -eq $parsed) { return @() }
+
+    # Filter by name here rather than in the query so that a null name -
+    # which JMESPath renders as $null rather than omitting the key - cannot
+    # blow up the comparison.
+    return @($parsed | Where-Object {
+            -not $ConnectionPrefix -or ("$($_.name)" -like "*$ConnectionPrefix*")
+        })
+}
 
 foreach ($id in $ids) {
     $resourceName = $id.Split('/')[-1]
@@ -104,35 +125,36 @@ foreach ($id in $ids) {
     # Not finding anything is NOT an error - the endpoint may already have been
     # approved by a previous run, which is the common case on re-apply.
     # ---------------------------------------------------------------------
-    $pending  = @()
-    $attempt  = 0
+    # ---------------------------------------------------------------------
+    # Filtering happens SERVER-SIDE, in JMESPath, not in PowerShell.
+    #
+    # The first version of this pipelined the raw JSON through Where-Object and
+    # read $_.properties...status and $_.name. Under `Set-StrictMode -Version
+    # Latest` that throws the moment ANY element lacks the property:
+    #
+    #     The property 'name' cannot be found on this object.
+    #
+    # and it did - part way through a run, AFTER approving one connection,
+    # leaving the remaining managed private endpoints Pending and the whole
+    # terraform apply failed. JMESPath simply yields nothing for a missing
+    # field, so the shape of what Azure returns can vary without breaking us.
+    #
+    # Projecting to {id, name} also means nothing downstream depends on the
+    # rest of the object graph.
+    # ---------------------------------------------------------------------
+    $pending = @()
+    $attempt = 0
+
+    $pendingQuery  = "[?properties.privateLinkServiceConnectionState.status=='Pending'].{id:id,name:name}"
+    $approvedQuery = "[?properties.privateLinkServiceConnectionState.status=='Approved'].{id:id,name:name}"
 
     while ($attempt -lt $MaxAttempts) {
         $attempt++
 
-        $raw = az network private-endpoint-connection list --id $id --output json 2>$null
-
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($raw)) {
-            # Some resource types do not expose this sub-resource at all until
-            # the first connection exists. Treat as "nothing yet".
-            $connections = @()
-        }
-        else {
-            $connections = $raw | ConvertFrom-Json
-        }
-
-        $pending = @($connections | Where-Object {
-            $_.properties.privateLinkServiceConnectionState.status -eq 'Pending' -and
-            (-not $ConnectionPrefix -or $_.name -like "*$ConnectionPrefix*")
-        })
-
+        $pending = Get-Connection -ResourceId $id -Query $pendingQuery
         if ($pending.Count -gt 0) { break }
 
-        $anyApproved = @($connections | Where-Object {
-            $_.properties.privateLinkServiceConnectionState.status -eq 'Approved' -and
-            (-not $ConnectionPrefix -or $_.name -like "*$ConnectionPrefix*")
-        })
-
+        $anyApproved = Get-Connection -ResourceId $id -Query $approvedQuery
         if ($anyApproved.Count -gt 0) {
             Write-Ok "$resourceName - $($anyApproved.Count) connection(s) already approved."
             break
@@ -158,7 +180,16 @@ foreach ($id in $ids) {
                 --output none 2>&1 | Out-Null
 
             if ($LASTEXITCODE -ne 0) {
-                throw "Failed to approve private endpoint connection '$connectionName' on '$resourceName'. Approve it manually in the portal (Networking -> Private endpoint connections) and re-run terraform apply."
+                # Record and keep going. Throwing here would leave every
+                # REMAINING endpoint pending - which is exactly what happened
+                # when this script first ran: it approved one connection, hit an
+                # error, and left three managed private endpoints unapproved.
+                # A partially-connected platform is harder to diagnose than a
+                # cleanly failed one, so approve everything we can and report
+                # the failures together at the end.
+                Write-Warn "$connectionName could NOT be approved."
+                $failures += "$resourceName / $connectionName"
+                continue
             }
 
             Write-Ok "$connectionName approved."
@@ -168,6 +199,20 @@ foreach ($id in $ids) {
 }
 
 Write-Step "Done. $totalApproved of $totalPending pending connection(s) approved."
+
+if ($failures.Count -gt 0) {
+    Write-Host ''
+    Write-Host 'These connections could not be approved:' -ForegroundColor Red
+    $failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    Write-Host ''
+    Write-Host 'Approve them in the portal (target resource -> Networking ->' -ForegroundColor Yellow
+    Write-Host 'Private endpoint connections) or with:' -ForegroundColor Yellow
+    Write-Host '  az network private-endpoint-connection approve --id <connection-id>' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host 'Until then the source service cannot reach the target, and pipelines' -ForegroundColor Yellow
+    Write-Host 'will fail with connection timeouts rather than permission errors.' -ForegroundColor Yellow
+    exit 1
+}
 
 # ---------------------------------------------------------------------------
 # Deliberately exit 0 when nothing was pending. Terraform re-runs this

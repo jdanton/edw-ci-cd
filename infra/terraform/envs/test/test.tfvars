@@ -94,3 +94,6 @@ tags = {
   owner       = "data-platform@your-org.com"
   criticality = "medium"
 }
+
+# Deployment identity for this environment (bootstrap: deploy_principal_ids).
+deployer_principal_id = "3a900958-36f7-45bc-b000-b37a919fb984"

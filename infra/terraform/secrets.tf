@@ -100,7 +100,7 @@ resource "azurerm_key_vault_secret" "sql_server_fqdn" {
 resource "azurerm_role_assignment" "deployer_keyvault_secrets_officer" {
   scope                            = module.keyvault.id
   role_definition_name             = "Key Vault Secrets Officer"
-  principal_id                     = data.azurerm_client_config.current.object_id
+  principal_id                     = local.deployer_principal_id
   skip_service_principal_aad_check = true
 
   description = "Terraform / CI deployment identity - creates and updates the secrets in this file."

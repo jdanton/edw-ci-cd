@@ -151,25 +151,15 @@ resource "azurerm_private_endpoint" "sql" {
 }
 
 # ---------------------------------------------------------------------------
-# Auditing
+# Auditing is NOT defined here.
 #
-# Writes to the lake's `logs` filesystem using the server's managed identity.
-# The identity needs Storage Blob Data Contributor there - granted by the
-# caller through modules/storage's data_plane_role_assignments.
+# The extended auditing policy needs the server managed identity to already
+# hold Storage Blob Data Contributor on the lake, and that role assignment
+# needs this module's principal_id. Defining the policy here would make the
+# module depend on a resource that depends on the module.
+#
+# It lives in infra/terraform/rbac.tf, next to the grant it requires.
 # ---------------------------------------------------------------------------
-
-resource "azurerm_mssql_server_extended_auditing_policy" "this" {
-  count = var.enable_auditing ? 1 : 0
-
-  server_id                               = azurerm_mssql_server.this.id
-  storage_endpoint                        = var.audit_storage_endpoint
-  storage_account_subscription_id         = var.subscription_id
-  retention_in_days                       = var.audit_retention_days
-  log_monitoring_enabled                  = true
-  storage_account_access_key_is_secondary = false
-
-  # No storage_account_access_key -> the server's managed identity is used.
-}
 
 resource "azurerm_mssql_server_security_alert_policy" "this" {
   count = var.enable_threat_detection ? 1 : 0
