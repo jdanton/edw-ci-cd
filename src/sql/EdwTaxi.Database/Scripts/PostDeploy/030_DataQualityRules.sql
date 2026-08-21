@@ -106,6 +106,16 @@ USING (VALUES
         100,
         N'SELECT FailedCount = COUNT_BIG(*) FROM fact.YellowTaxiTrip AS f JOIN dim.PaymentType AS pt ON pt.PaymentTypeKey = f.PaymentTypeKey WHERE f.PickupYear = @PickupYear AND f.PickupMonth = @PickupMonth AND pt.IsTipRecorded = 0 AND f.TipAmount > 0;',
         N'The meter cannot record a cash tip, so a non-zero tip on a non-card payment means either a source change or a mis-mapped payment type. Small counts occur naturally in restated months.'
+    ),
+    (
+        9,
+        'CongestionSurchargePresentFrom2019',
+        'fact.YellowTaxiTrip',
+        'Warning',
+        1,
+        0,
+        N'SELECT FailedCount = CASE WHEN @PickupYear >= 2019 AND NOT EXISTS (SELECT 1 FROM fact.YellowTaxiTrip WHERE PickupYear = @PickupYear AND PickupMonth = @PickupMonth AND CongestionSurchargeAmount IS NOT NULL) THEN 1 ELSE 0 END;',
+        N'From 2019 the TLC records a congestion surcharge on Manhattan trips. A month with no non-NULL value at all means the column was dropped upstream or the curated build did not pick it up. Warning rather than Blocking: the rest of the row is still correct. Deliberately silent before 2019, when the charge did not exist.'
     )
 ) AS source (RuleId, RuleName, TargetObject, Severity, IsEnabled, FailureThreshold, RuleSql, [Description])
     ON target.RuleId = source.RuleId

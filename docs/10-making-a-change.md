@@ -102,7 +102,13 @@ EXEC sp_describe_first_result_set N'
 ';
 ```
 
-Look for `congestion_surcharge` and note its `system_type_name`. Say it is
+Look for the surcharge column and note its exact name and `system_type_name`.
+Azure Open Datasets publishes this dataset in **camelCase** - `totalAmount`,
+`improvementSurcharge` - so expect `congestionSurcharge`, not the TLC's own
+`congestion_surcharge`. Getting this wrong does not fail the build or the
+query: `OPENROWSET ... WITH` returns NULL for a column the file does not
+contain, so a misspelt name produces a silently empty column. That is exactly
+what rule 9 in Step 7 is there to catch. Say it is
 `float`, and present only from 2019 onward — so it must be **nullable**
 everywhere downstream.
 
@@ -113,14 +119,14 @@ everywhere downstream.
 ```sql
     src.tollsAmount,
     src.totalAmount,
-    src.congestion_surcharge,          -- ADDED
+    src.congestionSurcharge,           -- ADDED
 ```
 
 and in the `WITH` clause:
 
 ```sql
         totalAmount          FLOAT        ,
-        congestion_surcharge FLOAT            -- ADDED. Nullable: absent before 2019.
+        congestionSurcharge  FLOAT            -- ADDED. Nullable: absent before 2019.
 ```
 
 > Adding a column to an explicit `WITH` clause is safe for **existing**
@@ -142,7 +148,7 @@ not compile:
 
 ```sql
         , TotalAmount               = TRY_CAST(r.totalAmount AS DECIMAL(10,2))
-        , CongestionSurchargeAmount = TRY_CAST(r.congestion_surcharge AS DECIMAL(10,2))   -- ADDED
+        , CongestionSurchargeAmount = TRY_CAST(r.congestionSurcharge AS DECIMAL(10,2))    -- ADDED
 ```
 
 `DECIMAL(10,2)`, not `FLOAT`, for the reason in the file header: a double

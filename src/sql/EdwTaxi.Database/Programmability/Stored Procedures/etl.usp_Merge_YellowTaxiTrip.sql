@@ -117,6 +117,7 @@ BEGIN
                 PassengerCount, TripDistanceMiles, TripDurationSeconds,
                 FareAmount, ExtraAmount, MtaTaxAmount, ImprovementSurchargeAmount,
                 TipAmount, TollsAmount, TotalAmount,
+                CongestionSurchargeAmount,
                 LoadId, LoadedAtUtc
             )
             SELECT
@@ -158,6 +159,7 @@ BEGIN
                 s.TipAmount,
                 s.TollsAmount,
                 s.TotalAmount,
+                s.CongestionSurchargeAmount,
 
                 @LoadId,
                 SYSUTCDATETIME()

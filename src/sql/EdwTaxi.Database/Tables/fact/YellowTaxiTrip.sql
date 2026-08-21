@@ -91,6 +91,13 @@ CREATE TABLE [fact].[YellowTaxiTrip]
     [TollsAmount]                DECIMAL(10,2) NULL,
     [TotalAmount]                DECIMAL(10,2) NULL,
 
+    /* ADDED. NULL, not NOT NULL. A NOT NULL column would need
+       GenerateSmartDefaults, which is False on purpose - it would quietly
+       fill the fact table with zeros that look like real measurements. NULL
+       is the truthful value for every trip before 2019, when the charge did
+       not exist. */
+    [CongestionSurchargeAmount]  DECIMAL(10,2) NULL,
+
     /* Lineage. LoadId joins to meta.LoadAudit and answers "which run put this
        row here" - the first question of every data investigation. */
     [LoadId]                     BIGINT        NOT NULL,

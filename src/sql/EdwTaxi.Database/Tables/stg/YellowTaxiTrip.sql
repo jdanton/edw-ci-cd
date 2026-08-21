@@ -48,6 +48,11 @@ CREATE TABLE [stg].[YellowTaxiTrip]
     [TipAmount]                  DECIMAL(10,2) NULL,
     [TollsAmount]                DECIMAL(10,2) NULL,
     [TotalAmount]                DECIMAL(10,2) NULL,
+    /* ADDED. The name must match the curated Parquet column EXACTLY: the Copy
+       activity matches by name and DS_Lake_Curated_Parquet has "schema": [],
+       so there is no explicit mapping to update - and no error if it is
+       misspelt, just a silently NULL column. */
+    [CongestionSurchargeAmount]  DECIMAL(10,2) NULL,
     [SourceFileName]             VARCHAR(400)  NULL,
     [CuratedAtUtc]               DATETIME2(7)  NULL
 );
