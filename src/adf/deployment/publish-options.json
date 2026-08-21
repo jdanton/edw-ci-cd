@@ -1,0 +1,55 @@
+{
+    "$comment": [
+        "Publish options for azure.datafactory.tools, per environment.",
+        "",
+        "This file uses a schema WE define; scripts/Deploy-DataFactory.ps1 reads it and",
+        "translates it into the module's own New-AdfPublishOption object. It is not a",
+        "file format the module reads directly - keeping the translation in our script",
+        "means an upstream option rename is a one-line fix here rather than a rewrite",
+        "of three workflow files.",
+        "",
+        "Option semantics (see docs/06-data-factory.md for the long version):",
+        "",
+        "  excludes          Artefacts NOT to publish. Wildcards allowed. Format is",
+        "                    '<type>.<name>' or just '<type>.*'.",
+        "  includes          If non-empty, ONLY these are published. Use for a targeted",
+        "                    hotfix deployment; leave empty for normal runs.",
+        "  deleteNotInSource Remove artefacts present in the factory but absent from the",
+        "                    repository. This is what makes the factory converge on the",
+        "                    repo rather than accumulating orphans forever.",
+        "  stopStartTriggers Stop every trigger before publishing and restart the ones",
+        "                    that should be running afterwards. Mandatory: ADF refuses",
+        "                    to modify a pipeline referenced by a STARTED trigger.",
+        "  createNewInstance Create the factory if missing. Always false here - Terraform",
+        "                    owns factory creation, and a pipeline that can create",
+        "                    factories can create them in the wrong subscription.",
+        "  deployGlobalParams Publish factory/*.json global parameters.",
+        "  ignoreLogsAtEnd   Suppress the module's end-of-run log dump in CI."
+    ],
+    "default": {
+        "excludes": [
+            "integrationRuntime.*",
+            "managedVirtualNetwork.*",
+            "managedPrivateEndpoint.*"
+        ],
+        "includes": [],
+        "deleteNotInSource": true,
+        "stopStartTriggers": true,
+        "createNewInstance": false,
+        "deployGlobalParams": false,
+        "ignoreLogsAtEnd": false
+    },
+    "environments": {
+        "dev": {
+            "$comment": "Dev is the Git-connected factory. deleteNotInSource stays TRUE so that an artefact deleted in a PR actually disappears from dev - otherwise dev slowly diverges from the repo and stops being a valid rehearsal for test.",
+            "deleteNotInSource": true
+        },
+        "test": {
+            "deleteNotInSource": true
+        },
+        "prod": {
+            "$comment": "Identical to test on purpose. A different publish option between test and prod means test is not rehearsing prod. Protection in prod comes from the GitHub Environment approval gate, not from weakening the deployment.",
+            "deleteNotInSource": true
+        }
+    }
+}

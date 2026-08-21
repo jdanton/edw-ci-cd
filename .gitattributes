@@ -1,0 +1,17 @@
+* text=auto eol=lf
+
+*.ps1   text eol=lf
+*.psm1  text eol=lf
+*.sql   text eol=lf
+*.tf    text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.csv   text eol=lf
+
+*.dacpac binary
+*.png    binary
+*.jpg    binary
+*.parquet binary
+
+# Generated / vendored - collapse in PR diffs
+docs/generated/**   linguist-generated=true

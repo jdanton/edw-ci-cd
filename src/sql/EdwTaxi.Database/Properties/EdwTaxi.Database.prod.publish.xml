@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  =============================================================================
+  PRODUCTION publish profile
+  =============================================================================
+
+  Identical to the test profile except for the deploy script filename. That is
+  the point: if test passed, prod is the same operation against a different
+  server.
+
+  PROTECTIONS AROUND THIS DEPLOYMENT THAT ARE NOT IN THIS FILE:
+
+    * GitHub Environment "prod" with required reviewers and a wait timer.
+    * The prod federated credential accepts only refs/heads/main.
+    * .github/workflows/sql-cd.yml runs /Action:DeployReport and
+      /Action:Script FIRST, publishes both as artefacts, and requires approval
+      before /Action:Publish. Nobody approves a production database change
+      without reading the exact T-SQL that will run.
+    * A point-in-time restore window of 35 days (infra/terraform envs/prod).
+
+  A publish profile cannot protect you from a bad change. It can only refuse to
+  perform an obviously destructive one. The review gate is the real control.
+  =============================================================================
+-->
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+
+    <BlockOnPossibleDataLoss>True</BlockOnPossibleDataLoss>
+    <DropObjectsNotInSource>True</DropObjectsNotInSource>
+
+    <ExcludeObjectTypes>Users;Logins;RoleMembership;Permissions;ServerRoleMembership;Credentials;DatabaseScopedCredentials;ServerAuditSpecifications;Audits;DatabaseAuditSpecifications</ExcludeObjectTypes>
+
+    <ScriptDatabaseOptions>False</ScriptDatabaseOptions>
+    <ScriptDatabaseCollation>False</ScriptDatabaseCollation>
+    <ScriptDatabaseCompatibility>False</ScriptDatabaseCompatibility>
+    <ScriptFileSize>False</ScriptFileSize>
+
+    <IgnoreColumnOrder>True</IgnoreColumnOrder>
+    <GenerateSmartDefaults>False</GenerateSmartDefaults>
+
+    <AllowIncompatiblePlatform>False</AllowIncompatiblePlatform>
+    <VerifyDeployment>True</VerifyDeployment>
+    <IncludeCompositeObjects>True</IncludeCompositeObjects>
+    <IncludeTransactionalScripts>True</IncludeTransactionalScripts>
+
+    <BlockWhenDriftDetected>True</BlockWhenDriftDetected>
+
+    <DropStatisticsNotInSource>False</DropStatisticsNotInSource>
+    <IgnoreExtendedProperties>False</IgnoreExtendedProperties>
+
+    <!--
+      30 minutes. A columnstore table rebuild on a nine-figure fact table
+      genuinely can take this long, and a deployment that times out halfway
+      through a rebuild is far worse than one that waits.
+    -->
+    <CommandTimeout>1800</CommandTimeout>
+    <DatabaseLockTimeout>120</DatabaseLockTimeout>
+
+    <DeployScriptFileName>EdwTaxi.Database.prod.sql</DeployScriptFileName>
+    <ProfileVersionNumber>1</ProfileVersionNumber>
+  </PropertyGroup>
+</Project>

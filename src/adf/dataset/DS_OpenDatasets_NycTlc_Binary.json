@@ -1,0 +1,37 @@
+{
+    "name": "DS_OpenDatasets_NycTlc_Binary",
+    "properties": {
+        "description": "Source side of the raw ingest. BINARY on purpose: a raw landing zone should hold the bytes exactly as the source published them. A Parquet dataset here would make ADF deserialise and re-serialise every file, which (a) costs DIUs for no benefit, (b) can silently change column physical types, and (c) destroys the ability to prove the file you hold is the file they published. Deserialisation happens later, in Synapse serverless, where it is cheap and re-runnable.",
+        "linkedServiceName": {
+            "referenceName": "LS_OpenDatasets_NycTlc",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "container": {
+                "type": "string",
+                "defaultValue": "nyctlc"
+            },
+            "folderPath": {
+                "type": "string"
+            }
+        },
+        "annotations": [
+            "source",
+            "raw-ingest"
+        ],
+        "type": "Binary",
+        "typeProperties": {
+            "location": {
+                "type": "AzureBlobStorageLocation",
+                "container": {
+                    "value": "@dataset().container",
+                    "type": "Expression"
+                },
+                "folderPath": {
+                    "value": "@dataset().folderPath",
+                    "type": "Expression"
+                }
+            }
+        }
+    }
+}

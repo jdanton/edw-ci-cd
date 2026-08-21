@@ -1,0 +1,43 @@
+{
+    "name": "TR_Monthly_NycTaxi_Load",
+    "properties": {
+        "description": "Production schedule: 03:00 UTC on the 5th of every month, loading the month that ended TWO months ago. The NYC TLC publishes trip records on a roughly two-month lag, so on 5 March the newest complete month available is January. Running on the 5th rather than the 1st gives Microsoft's Open Datasets mirror time to pick up the TLC release. runtimeState is Stopped in source control and started only in prod, by deployment/config-prod.csv - see docs/06-data-factory.md#trigger-state.",
+        "annotations": [
+            "nyc-taxi",
+            "schedule"
+        ],
+        "runtimeState": "Stopped",
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "PL_Master_NycTaxi_Load",
+                    "type": "PipelineReference"
+                },
+                "parameters": {
+                    "puYear": "@int(formatDateTime(subtractFromTime(trigger().scheduledTime, 2, 'Month'), 'yyyy'))",
+                    "puMonth": "@int(formatDateTime(subtractFromTime(trigger().scheduledTime, 2, 'Month'), 'MM'))"
+                }
+            }
+        ],
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Month",
+                "interval": 1,
+                "startTime": "2024-01-05T03:00:00Z",
+                "timeZone": "UTC",
+                "schedule": {
+                    "monthDays": [
+                        5
+                    ],
+                    "hours": [
+                        3
+                    ],
+                    "minutes": [
+                        0
+                    ]
+                }
+            }
+        }
+    }
+}

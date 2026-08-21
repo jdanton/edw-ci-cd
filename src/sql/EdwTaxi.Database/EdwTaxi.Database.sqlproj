@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  =============================================================================
+  EdwTaxi.Database.sqlproj  -  SDK-style SQL database project
+  =============================================================================
+
+  This is a Microsoft.Build.Sql SDK-style project, NOT a legacy .sqlproj.
+
+  What that buys over the old format:
+
+    * `dotnet build` works, on Linux and macOS, with no SSDT, no Visual Studio
+      and no Windows build agent. That is what lets this compile on your
+      self-hosted Linux runner.
+    * Files are GLOBBED (**/*.sql) rather than enumerated. Adding a table is
+      `git add`, not a merge conflict in an XML file - which is the single
+      biggest day-to-day irritation the legacy format produced.
+    * Package references work like any other .NET project, so referencing
+      master.dacpac or another database project is a <PackageReference>.
+
+  Build:
+      dotnet build src/sql/EdwTaxi.Database/EdwTaxi.Database.sqlproj -c Release
+
+  Output:
+      src/sql/EdwTaxi.Database/bin/Release/EdwTaxi.Database.dacpac
+
+  Deploy:  see .github/workflows/sql-cd.yml and docs/08-azure-sql.md
+  =============================================================================
+-->
+<Project Sdk="Microsoft.Build.Sql/1.0.0">
+
+  <PropertyGroup>
+    <Name>EdwTaxi.Database</Name>
+    <ProjectGuid>{6E9E2C4B-6D1E-4E4A-9A3B-2C6F1D5A7B31}</ProjectGuid>
+
+    <!--
+      Target platform. SqlAzureV12 is Azure SQL Database (single database and
+      elastic pool). Getting this wrong is not cosmetic: with a SQL Server
+      target, the model validator happily accepts FILEGROUP clauses and other
+      on-premises syntax that Azure SQL rejects at deploy time, turning a
+      compile-time error into a 2 a.m. production failure.
+    -->
+    <DSP>Microsoft.Data.Tools.Schema.Sql.SqlAzureV12DatabaseSchemaProvider</DSP>
+
+    <ModelCollation>1033, CI</ModelCollation>
+    <DefaultCollation>SQL_Latin1_General_CP1_CI_AS</DefaultCollation>
+
+    <!--
+      Treat model warnings as errors. Unresolved references (a procedure that
+      names a column that does not exist) are warnings by default, which means
+      a typo compiles cleanly and fails on the first execution. Promoting them
+      makes the build the place that catches it.
+
+      SuppressTSqlWarnings entries below are the deliberate exceptions; each one
+      has a reason. Never add to that list without one.
+    -->
+    <TreatTSqlWarningsAsErrors>True</TreatTSqlWarningsAsErrors>
+
+    <!--
+      SQL71502  Unresolved reference to an object.
+                Suppressed ONLY because the post-deploy script references
+                $(DataFactoryName), a principal that cannot exist in the model.
+      SQL71558  Object reference differs only by case.
+    -->
+    <SuppressTSqlWarnings>71502</SuppressTSqlWarnings>
+
+    <ValidateCasingOnIdentifiers>True</ValidateCasingOnIdentifiers>
+    <GenerateCreateScript>False</GenerateCreateScript>
+
+    <!-- Deterministic builds make the DACPAC byte-identical for identical
+         sources, so a rebuild does not produce a spurious "changed" artefact. -->
+    <Deterministic>True</Deterministic>
+    <NetCoreBuild>True</NetCoreBuild>
+  </PropertyGroup>
+
+  <!--
+    ==========================================================================
+    SQLCMD variables
+    ==========================================================================
+    Values are supplied at PUBLISH time (sqlpackage /v:Name=Value), not at
+    build time, so one DACPAC deploys to all three environments. That is the
+    whole point of the artefact: build once, deploy many.
+
+    Defaults here exist only so that `dotnet build` succeeds and so that a
+    developer publishing to a local container gets something sensible.
+    ==========================================================================
+  -->
+  <ItemGroup>
+    <SqlCmdVariable Include="DataFactoryName">
+      <DefaultValue>adf-edwtaxi-dev</DefaultValue>
+      <Value>$(SqlCmdVar__DataFactoryName)</Value>
+    </SqlCmdVariable>
+
+    <SqlCmdVariable Include="EnvironmentName">
+      <DefaultValue>dev</DefaultValue>
+      <Value>$(SqlCmdVar__EnvironmentName)</Value>
+    </SqlCmdVariable>
+
+    <SqlCmdVariable Include="DimDateStartYear">
+      <DefaultValue>2009</DefaultValue>
+      <Value>$(SqlCmdVar__DimDateStartYear)</Value>
+    </SqlCmdVariable>
+
+    <SqlCmdVariable Include="DimDateEndYear">
+      <DefaultValue>2035</DefaultValue>
+      <Value>$(SqlCmdVar__DimDateEndYear)</Value>
+    </SqlCmdVariable>
+  </ItemGroup>
+
+  <!--
+    ==========================================================================
+    Pre/post deploy scripts
+    ==========================================================================
+    The SDK globs **/*.sql into <Build>. Deployment scripts are not schema, so
+    they must be removed from that glob first, then re-added with the right
+    build action. Exactly ONE PreDeploy and ONE PostDeploy item is permitted;
+    everything else is pulled in with :r from those two entry points and must
+    be <None> so the compiler ignores it but MSBuild still copies it.
+    ==========================================================================
+  -->
+  <ItemGroup>
+    <Build Remove="Scripts/**/*.sql" />
+
+    <PreDeploy Include="Scripts/PreDeploy/PreDeploy.sql" />
+    <PostDeploy Include="Scripts/PostDeploy/PostDeploy.sql" />
+
+    <None Include="Scripts/PreDeploy/**/*.sql" Exclude="Scripts/PreDeploy/PreDeploy.sql" />
+    <None Include="Scripts/PostDeploy/**/*.sql" Exclude="Scripts/PostDeploy/PostDeploy.sql" />
+  </ItemGroup>
+
+  <!-- Publish profiles are inputs to sqlpackage, not to the compiler. -->
+  <ItemGroup>
+    <None Include="Properties/*.publish.xml" />
+  </ItemGroup>
+
+</Project>

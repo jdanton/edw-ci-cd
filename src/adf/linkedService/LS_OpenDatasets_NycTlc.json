@@ -1,0 +1,21 @@
+{
+    "name": "LS_OpenDatasets_NycTlc",
+    "properties": {
+        "description": "Azure Open Datasets - NYC Taxi & Limousine Commission trip records. PUBLIC, ANONYMOUS blob storage account owned by Microsoft; there is nothing to authenticate with and no credential to rotate. Identical in every environment, so config-<env>.csv leaves it alone. NOTE: this is the one outbound destination in the whole platform that is NOT reached over a managed private endpoint - a managed-VNet Azure IR keeps outbound access to public endpoints, which is what makes an anonymous read possible. If you ever enable Synapse data exfiltration protection or an equivalent egress lockdown, this is the first thing that breaks.",
+        "annotations": [
+            "public-source",
+            "nyc-taxi",
+            "anonymous"
+        ],
+        "type": "AzureBlobStorage",
+        "typeProperties": {
+            "serviceEndpoint": "https://azureopendatastorage.blob.core.windows.net",
+            "accountKind": "StorageV2",
+            "authenticationType": "Anonymous"
+        },
+        "connectVia": {
+            "referenceName": "IR-ManagedVNet",
+            "type": "IntegrationRuntimeReference"
+        }
+    }
+}

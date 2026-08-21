@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  =============================================================================
+  TEST publish profile
+  =============================================================================
+
+  TEST EXISTS TO REHEARSE PRODUCTION. Every safety setting below is identical
+  to prod. The only differences between this file and the prod profile are the
+  deploy script filename and drift blocking.
+
+  If you find yourself relaxing a setting here to get a deployment through,
+  stop: you have just discovered something that will fail in prod, which is
+  precisely what test is for.
+  =============================================================================
+-->
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+
+    <!--
+      TRUE. A change that would lose data fails the deployment rather than
+      performing it.
+
+      When this blocks you, the answer is a migration: add the new column,
+      backfill it in a post-deploy script, deploy, then drop the old column in
+      a SEPARATE later deployment. Three deployments instead of one, and no
+      possibility of losing a column of production data because a rename looked
+      to sqlpackage like a drop-and-add. docs/10-making-a-change.md walks
+      through exactly this.
+    -->
+    <BlockOnPossibleDataLoss>True</BlockOnPossibleDataLoss>
+
+    <DropObjectsNotInSource>True</DropObjectsNotInSource>
+
+    <ExcludeObjectTypes>Users;Logins;RoleMembership;Permissions;ServerRoleMembership;Credentials;DatabaseScopedCredentials;ServerAuditSpecifications;Audits;DatabaseAuditSpecifications</ExcludeObjectTypes>
+
+    <ScriptDatabaseOptions>False</ScriptDatabaseOptions>
+    <ScriptDatabaseCollation>False</ScriptDatabaseCollation>
+    <ScriptDatabaseCompatibility>False</ScriptDatabaseCompatibility>
+    <ScriptFileSize>False</ScriptFileSize>
+
+    <IgnoreColumnOrder>True</IgnoreColumnOrder>
+    <GenerateSmartDefaults>False</GenerateSmartDefaults>
+
+    <AllowIncompatiblePlatform>False</AllowIncompatiblePlatform>
+    <VerifyDeployment>True</VerifyDeployment>
+    <IncludeCompositeObjects>True</IncludeCompositeObjects>
+    <IncludeTransactionalScripts>True</IncludeTransactionalScripts>
+
+    <!--
+      TRUE from test upward.
+
+      Drift means the database no longer matches what was last deployed -
+      somebody changed it outside the pipeline. Deploying over drift silently
+      reverts their change, which is how a 2 a.m. emergency index fix disappears
+      at the next release and the incident recurs.
+
+      When this blocks a deployment, find out what changed (the sql-cd workflow
+      publishes a DeployReport artefact showing exactly that), decide whether it
+      belongs in the project, and either add it or remove it deliberately.
+    -->
+    <BlockWhenDriftDetected>True</BlockWhenDriftDetected>
+
+    <DropStatisticsNotInSource>False</DropStatisticsNotInSource>
+    <IgnoreExtendedProperties>False</IgnoreExtendedProperties>
+
+    <CommandTimeout>1800</CommandTimeout>
+    <DatabaseLockTimeout>120</DatabaseLockTimeout>
+
+    <DeployScriptFileName>EdwTaxi.Database.test.sql</DeployScriptFileName>
+    <ProfileVersionNumber>1</ProfileVersionNumber>
+  </PropertyGroup>
+</Project>

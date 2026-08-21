@@ -1,0 +1,265 @@
+{
+    "name": "PL_Ingest_NycTaxi_Yellow",
+    "properties": {
+        "description": "STAGE 1 of 3 - land one month of NYC yellow-taxi trip records from Azure Open Datasets into the raw filesystem, byte for byte. Idempotent: re-running the same month overwrites the same partition folder. Called by PL_Master_NycTaxi_Load; safe to run standalone for a single-month repair.",
+        "folder": {
+            "name": "01 Ingest"
+        },
+        "annotations": [
+            "nyc-taxi",
+            "ingest",
+            "raw"
+        ],
+        "parameters": {
+            "puYear": {
+                "type": "int",
+                "description": "Pickup year, e.g. 2024. Open Datasets partitions on pickup date, not file publication date.",
+                "defaultValue": 2024
+            },
+            "puMonth": {
+                "type": "int",
+                "description": "Pickup month 1-12. NOT zero padded - the source uses puMonth=1, never puMonth=01.",
+                "defaultValue": 1
+            }
+        },
+        "variables": {
+            "sourceFolder": {
+                "type": "String"
+            },
+            "sinkFolder": {
+                "type": "String"
+            }
+        },
+        "activities": [
+            {
+                "name": "Build Paths",
+                "description": "Both paths derived once, here, so that the folder convention appears exactly twice in this pipeline instead of once per activity. The source layout (yellow/puYear=YYYY/puMonth=M) is dictated by Microsoft; the sink layout is ours and matches what src/synapse/serverless/060_views_raw.sql expects to prune on with filepath().",
+                "type": "SetVariable",
+                "dependsOn": [],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "variableName": "sourceFolder",
+                    "value": {
+                        "value": "@concat('yellow/puYear=', string(pipeline().parameters.puYear), '/puMonth=', string(pipeline().parameters.puMonth))",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "Build Sink Path",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "Build Paths",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "variableName": "sinkFolder",
+                    "value": {
+                        "value": "@concat('nyctlc/yellow/puYear=', string(pipeline().parameters.puYear), '/puMonth=', string(pipeline().parameters.puMonth))",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "Check Source Exists",
+                "description": "Ask ONLY for `exists`. Requesting childItems on a folder that does not exist throws a generic 'Path does not exist' failure instead of returning false, which turns a clear 'that month has not been published yet' into an opaque copy failure. This is the single most useful defensive pattern in ADF and costs one cheap metadata call.",
+                "type": "GetMetadata",
+                "dependsOn": [
+                    {
+                        "activity": "Build Sink Path",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "dataset": {
+                        "referenceName": "DS_OpenDatasets_NycTlc_Binary",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "container": "nyctlc",
+                            "folderPath": {
+                                "value": "@variables('sourceFolder')",
+                                "type": "Expression"
+                            }
+                        }
+                    },
+                    "fieldList": [
+                        "exists"
+                    ],
+                    "storeSettings": {
+                        "type": "AzureBlobStorageReadSettings",
+                        "recursive": false,
+                        "enablePartitionDiscovery": false
+                    },
+                    "formatSettings": {
+                        "type": "BinaryReadSettings"
+                    }
+                }
+            },
+            {
+                "name": "Source Available",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "Check Source Exists",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@activity('Check Source Exists').output.exists",
+                        "type": "Expression"
+                    },
+                    "ifFalseActivities": [
+                        {
+                            "name": "Fail Month Not Published",
+                            "description": "Fail LOUDLY rather than succeeding with zero rows. A silent no-op here would propagate as an empty curated partition, an empty staging table, and a merge that deletes nothing and inserts nothing - and nobody would notice until a report showed a gap weeks later.",
+                            "type": "Fail",
+                            "dependsOn": [],
+                            "typeProperties": {
+                                "message": {
+                                    "value": "@concat('NYC TLC yellow taxi data for ', string(pipeline().parameters.puYear), '-', string(pipeline().parameters.puMonth), ' is not present in the Open Datasets container at path nyctlc/', variables('sourceFolder'), '. The TLC publishes with a two-month lag; verify the month is available before re-running.')",
+                                    "type": "Expression"
+                                },
+                                "errorCode": "SOURCE_PARTITION_NOT_PUBLISHED"
+                            }
+                        }
+                    ],
+                    "ifTrueActivities": [
+                        {
+                            "name": "Copy Raw Files",
+                            "description": "Binary copy, PreserveHierarchy. validateDataConsistency makes ADF verify size and (where the store supplies it) checksum on every file, so a truncated transfer fails the activity instead of silently landing a corrupt Parquet file that Synapse will reject hours later with a far less obvious error.",
+                            "type": "Copy",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.02:00:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 60,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "source": {
+                                    "type": "BinarySource",
+                                    "storeSettings": {
+                                        "type": "AzureBlobStorageReadSettings",
+                                        "recursive": true,
+                                        "wildcardFolderPath": {
+                                            "value": "@variables('sourceFolder')",
+                                            "type": "Expression"
+                                        },
+                                        "wildcardFileName": "*.parquet",
+                                        "enablePartitionDiscovery": false
+                                    },
+                                    "formatSettings": {
+                                        "type": "BinaryReadSettings"
+                                    }
+                                },
+                                "sink": {
+                                    "type": "BinarySink",
+                                    "storeSettings": {
+                                        "type": "AzureBlobFSWriteSettings",
+                                        "copyBehavior": "PreserveHierarchy"
+                                    }
+                                },
+                                "enableStaging": false,
+                                "parallelCopies": 8,
+                                "dataIntegrationUnits": 8,
+                                "validateDataConsistency": true
+                            },
+                            "inputs": [
+                                {
+                                    "referenceName": "DS_OpenDatasets_NycTlc_Binary",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "container": "nyctlc",
+                                        "folderPath": " "
+                                    }
+                                }
+                            ],
+                            "outputs": [
+                                {
+                                    "referenceName": "DS_Lake_Binary",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "fileSystem": "raw",
+                                        "folderPath": {
+                                            "value": "@variables('sinkFolder')",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Return Ingest Stats",
+                            "description": "Pipeline return values let PL_Master_NycTaxi_Load read filesCopied/bytesCopied from the child run without querying the ADF REST API. Read them as activity('...').output.pipelineReturnValue.filesCopied.",
+                            "type": "SetVariable",
+                            "dependsOn": [
+                                {
+                                    "activity": "Copy Raw Files",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "variableName": "pipelineReturnValue",
+                                "value": [
+                                    {
+                                        "key": "filesCopied",
+                                        "value": {
+                                            "type": "Expression",
+                                            "content": "@activity('Copy Raw Files').output.filesWritten"
+                                        }
+                                    },
+                                    {
+                                        "key": "bytesCopied",
+                                        "value": {
+                                            "type": "Expression",
+                                            "content": "@activity('Copy Raw Files').output.dataWritten"
+                                        }
+                                    },
+                                    {
+                                        "key": "rawPath",
+                                        "value": {
+                                            "type": "Expression",
+                                            "content": "@variables('sinkFolder')"
+                                        }
+                                    }
+                                ],
+                                "setSystemVariable": true
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+}

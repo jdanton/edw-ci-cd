@@ -1,0 +1,23 @@
+{
+    "name": "LS_AzureSql_Edw",
+    "properties": {
+        "description": "Azure SQL Database serving layer - the star schema that Power BI and downstream applications query. Copy sink for staging loads and the target of the etl.* stored procedures. Managed-identity auth; the contained database user is created by src/sql/Scripts/PostDeploy/030_ServicePrincipals.sql, because Azure RBAC cannot create SQL principals.",
+        "annotations": [
+            "serving-layer",
+            "azure-sql",
+            "managed-identity"
+        ],
+        "type": "AzureSqlDatabase",
+        "typeProperties": {
+            "server": "REPLACED-BY-CONFIG-CSV.database.windows.net",
+            "database": "edw",
+            "encrypt": "mandatory",
+            "trustServerCertificate": false,
+            "authenticationType": "SystemAssignedManagedIdentity"
+        },
+        "connectVia": {
+            "referenceName": "IR-ManagedVNet",
+            "type": "IntegrationRuntimeReference"
+        }
+    }
+}

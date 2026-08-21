@@ -1,0 +1,395 @@
+{
+    "name": "PL_Load_Sql_YellowTrip",
+    "properties": {
+        "description": "STAGE 3 of 3 - load one curated month into the Azure SQL star schema. Pattern: open an audit row, bulk-copy curated Parquet into a heap staging table, MERGE staging into fact.YellowTaxiTrip, close the audit row. Every step is idempotent for a given (puYear, puMonth), so a failed run is repaired by re-running it, never by hand-editing the warehouse.",
+        "folder": {
+            "name": "03 Load"
+        },
+        "annotations": [
+            "nyc-taxi",
+            "load",
+            "azure-sql"
+        ],
+        "concurrency": 1,
+        "parameters": {
+            "puYear": {
+                "type": "int",
+                "defaultValue": 2024
+            },
+            "puMonth": {
+                "type": "int",
+                "defaultValue": 1
+            }
+        },
+        "variables": {
+            "curatedPath": {
+                "type": "String"
+            }
+        },
+        "activities": [
+            {
+                "name": "Build Curated Path",
+                "type": "SetVariable",
+                "dependsOn": [],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "variableName": "curatedPath",
+                    "value": {
+                        "value": "@concat('nyctlc/yellow_trip/PickupYear=', string(pipeline().parameters.puYear), '/PickupMonth=', string(pipeline().parameters.puMonth))",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "Start Load",
+                "description": "Opens a row in meta.LoadAudit and returns its LoadId. Every subsequent step stamps that LoadId onto the rows it touches, which is what makes 'which run put this bad row here' answerable six months later. Implemented as a Lookup rather than a Stored Procedure activity because only Lookup can read an output value back into the pipeline.",
+                "type": "Lookup",
+                "dependsOn": [
+                    {
+                        "activity": "Build Curated Path",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:30:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderStoredProcedureName": "[etl].[usp_Start_Load]",
+                        "storedProcedureParameters": {
+                            "PipelineName": {
+                                "type": "String",
+                                "value": {
+                                    "value": "@pipeline().Pipeline",
+                                    "type": "Expression"
+                                }
+                            },
+                            "PipelineRunId": {
+                                "type": "String",
+                                "value": {
+                                    "value": "@pipeline().RunId",
+                                    "type": "Expression"
+                                }
+                            },
+                            "TargetObject": {
+                                "type": "String",
+                                "value": "fact.YellowTaxiTrip"
+                            },
+                            "PartitionKey": {
+                                "type": "String",
+                                "value": {
+                                    "value": "@concat(string(pipeline().parameters.puYear), '-', formatNumber(pipeline().parameters.puMonth, '00'))",
+                                    "type": "Expression"
+                                }
+                            }
+                        },
+                        "queryTimeout": "00:30:00",
+                        "partitionOption": "None"
+                    },
+                    "dataset": {
+                        "referenceName": "DS_AzureSql_Table",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "schemaName": "meta",
+                            "tableName": "LoadAudit"
+                        }
+                    },
+                    "firstRowOnly": true
+                }
+            },
+            {
+                "name": "Load Staging Table",
+                "description": "Curated Parquet -> stg.YellowTaxiTrip. preCopyScript empties staging first; TRUNCATE is safe here ONLY because pipeline concurrency is pinned to 1 above - remove that and two concurrent months will silently interleave. writeBehavior is bulk insert into a heap with no indexes, which is the fastest path into Azure SQL that does not require an external staging blob.",
+                "type": "Copy",
+                "dependsOn": [
+                    {
+                        "activity": "Start Load",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.02:00:00",
+                    "retry": 1,
+                    "retryIntervalInSeconds": 120,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "ParquetSource",
+                        "storeSettings": {
+                            "type": "AzureBlobFSReadSettings",
+                            "recursive": true,
+                            "wildcardFileName": "*.parquet",
+                            "enablePartitionDiscovery": false
+                        },
+                        "formatSettings": {
+                            "type": "ParquetReadSettings"
+                        }
+                    },
+                    "sink": {
+                        "type": "AzureSqlSink",
+                        "preCopyScript": "TRUNCATE TABLE stg.YellowTaxiTrip;",
+                        "writeBehavior": "insert",
+                        "sqlWriterUseTableLock": true,
+                        "tableOption": "none",
+                        "writeBatchSize": 100000,
+                        "writeBatchTimeout": "00:30:00",
+                        "disableMetricsCollection": false
+                    },
+                    "enableStaging": false,
+                    "parallelCopies": 4,
+                    "dataIntegrationUnits": 8,
+                    "translator": {
+                        "type": "TabularTranslator",
+                        "typeConversion": true,
+                        "typeConversionSettings": {
+                            "allowDataTruncation": false,
+                            "treatBooleanAsNumber": false
+                        }
+                    }
+                },
+                "inputs": [
+                    {
+                        "referenceName": "DS_Lake_Curated_Parquet",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "fileSystem": "curated",
+                            "folderPath": {
+                                "value": "@variables('curatedPath')",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "DS_AzureSql_Table",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "schemaName": "stg",
+                            "tableName": "YellowTaxiTrip"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "Merge Into Fact",
+                "description": "Set-based DELETE-then-INSERT of the whole (PickupYear, PickupMonth) partition, wrapped in a transaction. NOT a T-SQL MERGE statement, despite the name - see the comment in src/sql/Programmability/Stored Procedures/etl.usp_Merge_YellowTaxiTrip.sql for why MERGE is avoided against a clustered columnstore.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "Load Staging Table",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.02:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_AzureSql_Edw",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_Merge_YellowTaxiTrip]",
+                    "storedProcedureParameters": {
+                        "LoadId": {
+                            "value": {
+                                "value": "@activity('Start Load').output.firstRow.LoadId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "PickupYear": {
+                            "value": {
+                                "value": "@pipeline().parameters.puYear",
+                                "type": "Expression"
+                            },
+                            "type": "Int32"
+                        },
+                        "PickupMonth": {
+                            "value": {
+                                "value": "@pipeline().parameters.puMonth",
+                                "type": "Expression"
+                            },
+                            "type": "Int32"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "Run Data Quality Checks",
+                "description": "Asserts the invariants that the empty-schema Parquet dataset cannot: no NULLs in mandatory keys, fare amounts inside plausible bounds, row count within tolerance of the curated count. Writes results to meta.DataQualityResult and RAISERRORs on a Blocking failure, which fails the activity and therefore the load.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "Merge Into Fact",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.01:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_AzureSql_Edw",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_RunDataQualityChecks]",
+                    "storedProcedureParameters": {
+                        "LoadId": {
+                            "value": {
+                                "value": "@activity('Start Load').output.firstRow.LoadId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "PickupYear": {
+                            "value": {
+                                "value": "@pipeline().parameters.puYear",
+                                "type": "Expression"
+                            },
+                            "type": "Int32"
+                        },
+                        "PickupMonth": {
+                            "value": {
+                                "value": "@pipeline().parameters.puMonth",
+                                "type": "Expression"
+                            },
+                            "type": "Int32"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "Complete Load",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "Run Data Quality Checks",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:30:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_AzureSql_Edw",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_Complete_Load]",
+                    "storedProcedureParameters": {
+                        "LoadId": {
+                            "value": {
+                                "value": "@activity('Start Load').output.firstRow.LoadId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "Status": {
+                            "value": "Succeeded",
+                            "type": "String"
+                        },
+                        "Message": {
+                            "value": {
+                                "value": "@concat('Loaded ', string(activity('Load Staging Table').output.rowsCopied), ' staged rows in ', string(div(activity('Load Staging Table').output.copyDuration, 60)), ' minutes.')",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "Fail Load",
+                "description": "Closes the audit row as Failed. dependsOn lists EVERY activity that can fail after the audit row is opened, each with dependencyCondition Failed - ADF treats multiple dependencies as AND by default, but a Failed condition only fires for the branch that actually failed, so this behaves as the OR you want. Without this activity a crashed run leaves meta.LoadAudit permanently 'Running' and the next run's duplicate-run guard blocks it.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "Load Staging Table",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    },
+                    {
+                        "activity": "Merge Into Fact",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    },
+                    {
+                        "activity": "Run Data Quality Checks",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:30:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_AzureSql_Edw",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_Complete_Load]",
+                    "storedProcedureParameters": {
+                        "LoadId": {
+                            "value": {
+                                "value": "@activity('Start Load').output.firstRow.LoadId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "Status": {
+                            "value": "Failed",
+                            "type": "String"
+                        },
+                        "Message": {
+                            "value": {
+                                "value": "@concat('Run ', pipeline().RunId, ' failed. Inspect ADFActivityRun in Log Analytics for the error detail.')",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        }
+                    }
+                }
+            }
+        ]
+    }
+}

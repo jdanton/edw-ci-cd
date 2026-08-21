@@ -1,0 +1,51 @@
+{
+    "$comment": [
+        "Publish options for azure.synapse.tools, per environment.",
+        "Read by scripts/Deploy-Synapse.ps1 and translated into the module's own",
+        "New-SynapsePublishOption object.",
+        "",
+        "IMPORTANT - what this tool does and does NOT deploy:",
+        "",
+        "  DOES deploy   workspace ARTEFACTS - linked services, datasets, notebooks,",
+        "                SQL script tabs, Synapse pipelines, triggers, Spark job",
+        "                definitions. These live in the workspace's own artefact store",
+        "                and are reached through the Dev API (<ws>.dev.azuresynapse.net).",
+        "",
+        "  Does NOT deploy   anything INSIDE the serverless SQL database. Databases,",
+        "                schemas, external data sources, file formats, views and",
+        "                procedures are ordinary T-SQL objects. No artefact API can",
+        "                create them; they need a SQL connection.",
+        "",
+        "That second point is the most common misconception about deploying Synapse.",
+        "A SQL script artefact is a saved query TAB in Studio - deploying it does not",
+        "execute anything. src/synapse/serverless/*.sql is therefore deployed by",
+        "scripts/Deploy-ServerlessSql.ps1 over TDS, as a separate step in",
+        ".github/workflows/synapse-cd.yml.",
+        "",
+        "Option semantics mirror the ADF module - see src/adf/deployment/publish-options.json."
+    ],
+    "default": {
+        "excludes": [
+            "integrationRuntime.*",
+            "managedVirtualNetwork.*",
+            "managedPrivateEndpoint.*",
+            "credential.*"
+        ],
+        "includes": [],
+        "deleteNotInSource": true,
+        "stopStartTriggers": true,
+        "createNewInstance": false,
+        "ignoreLogsAtEnd": false
+    },
+    "environments": {
+        "dev": {
+            "deleteNotInSource": true
+        },
+        "test": {
+            "deleteNotInSource": true
+        },
+        "prod": {
+            "deleteNotInSource": true
+        }
+    }
+}

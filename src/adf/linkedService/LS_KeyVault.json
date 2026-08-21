@@ -1,0 +1,18 @@
+{
+    "name": "LS_KeyVault",
+    "properties": {
+        "description": "Azure Key Vault for this environment. Under the template defaults (Entra-only authentication everywhere) NOTHING currently resolves a secret through it - every connection uses the factory managed identity instead. It is deployed anyway because the moment you add a source that genuinely needs a credential - an on-premises SQL Server, an SFTP site, a partner API key - this is where that credential belongs, and adding the linked service later means re-testing managed private endpoint connectivity under time pressure.",
+        "annotations": [
+            "key-vault",
+            "managed-identity"
+        ],
+        "type": "AzureKeyVault",
+        "typeProperties": {
+            "baseUrl": "https://REPLACED-BY-CONFIG-CSV.vault.azure.net/"
+        },
+        "connectVia": {
+            "referenceName": "IR-ManagedVNet",
+            "type": "IntegrationRuntimeReference"
+        }
+    }
+}

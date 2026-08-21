@@ -1,0 +1,71 @@
+# ---------------------------------------------------------------------------
+# Terraform
+# ---------------------------------------------------------------------------
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.json
+crash.log
+crash.*.log
+# Terraform variable files.
+#
+# Default-deny, because the bootstrap layer's terraform.tfvars carries tenant
+# and subscription identifiers that a template repository should not ship.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# ...but the per-environment tfvars ARE the environment definition and MUST be
+# committed and code-reviewed. They contain no secrets: only names, sizes,
+# CIDRs and Entra *group* object IDs (which are not credentials).
+!infra/terraform/envs/**/*.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+.terraform.lock.hcl.bak
+
+# ---------------------------------------------------------------------------
+# .NET / SQL database projects
+# ---------------------------------------------------------------------------
+bin/
+obj/
+*.user
+*.suo
+*.dbmdl
+*.jfm
+.vs/
+artifacts/
+*.dacpac.zip
+
+# ---------------------------------------------------------------------------
+# PowerShell
+# ---------------------------------------------------------------------------
+*.psd1.bak
+
+# ---------------------------------------------------------------------------
+# Local / editor
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+.env
+.env.*
+!.env.example
+local/
+tmp/
+out/
+
+# ---------------------------------------------------------------------------
+# Secrets - defence in depth. Nothing here should ever exist in the repo.
+# ---------------------------------------------------------------------------
+*.pfx
+*.pem
+*.key
+!**/testdata/*.key
+azureauth.json
+publishsettings.xml

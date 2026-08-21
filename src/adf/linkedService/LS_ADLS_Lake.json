@@ -1,0 +1,18 @@
+{
+    "name": "LS_ADLS_Lake",
+    "properties": {
+        "description": "ADLS Gen2 data lake - raw, curated, sandbox and logs filesystems. Authenticates with the factory's SYSTEM-ASSIGNED MANAGED IDENTITY: there is no key, no secret and no Key Vault reference here. The identity is granted Storage Blob Data Contributor by infra/terraform/rbac.tf. The `url` below is rewritten per environment by deployment/config-<env>.csv.",
+        "annotations": [
+            "lake",
+            "managed-identity"
+        ],
+        "type": "AzureBlobFS",
+        "typeProperties": {
+            "url": "https://REPLACED-BY-CONFIG-CSV.dfs.core.windows.net"
+        },
+        "connectVia": {
+            "referenceName": "IR-ManagedVNet",
+            "type": "IntegrationRuntimeReference"
+        }
+    }
+}

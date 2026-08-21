@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  =============================================================================
+  DEV publish profile
+  =============================================================================
+
+  Used by:
+    sqlpackage /Action:Publish \
+      /SourceFile:bin/Release/EdwTaxi.Database.dacpac \
+      /Profile:Properties/EdwTaxi.Database.dev.publish.xml \
+      /TargetServerName:<from terraform output sql_server_fqdn> \
+      /TargetDatabaseName:edw \
+      /AccessToken:<Entra token> \
+      /v:DataFactoryName=<from terraform output data_factory_name> \
+      /v:EnvironmentName=dev
+
+  Connection details and SQLCMD variables are deliberately NOT in this file.
+  They come from Terraform outputs at deploy time, so one DACPAC and one
+  profile serve any number of rebuilt environments.
+
+  DEV IS THE PERMISSIVE PROFILE. It is the only one that will destroy data
+  without asking, because dev data is reproducible in twenty minutes by
+  re-running PL_Backfill_NycTaxi_Yellow. Do not copy these settings upward.
+  =============================================================================
+-->
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+
+    <!-- ===================================================================
+         Data safety
+         =================================================================== -->
+
+    <!--
+      FALSE in dev only.
+
+      With this false, sqlpackage will happily drop a column, narrow a type, or
+      rebuild a table and lose rows. In dev that is what you want: iterating on
+      a schema should not require a manual override every time you shorten a
+      VARCHAR.
+
+      In test and prod this is TRUE, and a change that would lose data fails the
+      deployment. That is not an inconvenience to work around - it is the
+      pipeline telling you the change needs a migration script.
+    -->
+    <BlockOnPossibleDataLoss>False</BlockOnPossibleDataLoss>
+
+    <!--
+      Objects in the database but not in the project are dropped, so dev
+      converges on the repository rather than accumulating whatever anyone
+      created by hand at 4 p.m. on a Friday. Security objects are excluded
+      below and are never dropped.
+    -->
+    <DropObjectsNotInSource>True</DropObjectsNotInSource>
+
+    <!-- ===================================================================
+         What sqlpackage must NEVER touch
+         ===================================================================
+
+         Security is owned by two other things:
+           * Azure RBAC and the Entra admin group   -> infra/terraform
+           * Contained users, roles and grants      -> Scripts/PostDeploy/040
+
+         If sqlpackage also managed them, it would drop the Data Factory user
+         on every deployment (it is not in the model - it cannot be, since its
+         name is environment-specific) and the next pipeline run would fail.
+
+         Removing entries from this list is one of the few ways to break
+         production with a deployment that reports success.
+         =================================================================== -->
+    <ExcludeObjectTypes>Users;Logins;RoleMembership;Permissions;ServerRoleMembership;Credentials;DatabaseScopedCredentials;ServerAuditSpecifications;Audits;DatabaseAuditSpecifications</ExcludeObjectTypes>
+
+    <!-- ===================================================================
+         Database-level settings belong to Terraform
+         ===================================================================
+         Collation, recovery model, compatibility level, auto-tuning: all set
+         by azurerm_mssql_database. Letting sqlpackage script them means two
+         systems fight over the same properties and every deployment shows a
+         spurious change.
+         =================================================================== -->
+    <ScriptDatabaseOptions>False</ScriptDatabaseOptions>
+    <ScriptDatabaseCollation>False</ScriptDatabaseCollation>
+    <ScriptDatabaseCompatibility>False</ScriptDatabaseCompatibility>
+    <ScriptFileSize>False</ScriptFileSize>
+
+    <!-- ===================================================================
+         Change behaviour
+         =================================================================== -->
+
+    <!--
+      Column ORDER differences do not trigger a table rebuild.
+
+      Adding a column to the middle of a CREATE TABLE in the project would
+      otherwise make sqlpackage rebuild the table to match - copying every row
+      of a hundred-million-row columnstore inside the deployment transaction,
+      for a purely cosmetic difference. Physical column order is meaningless
+      to every query in this warehouse.
+    -->
+    <IgnoreColumnOrder>True</IgnoreColumnOrder>
+
+    <!--
+      FALSE. Smart defaults invent a default value so that a new NOT NULL
+      column can be added to a table with existing rows. It works, and it
+      quietly fills your fact table with zeros that look like real
+      measurements. Adding a NOT NULL column should require you to state what
+      existing rows mean - in a post-deploy script, deliberately.
+    -->
+    <GenerateSmartDefaults>False</GenerateSmartDefaults>
+
+    <AllowIncompatiblePlatform>False</AllowIncompatiblePlatform>
+    <VerifyDeployment>True</VerifyDeployment>
+    <IncludeCompositeObjects>True</IncludeCompositeObjects>
+    <IncludeTransactionalScripts>True</IncludeTransactionalScripts>
+
+    <!-- Dev is a free-for-all by design; do not block on drift here. -->
+    <BlockWhenDriftDetected>False</BlockWhenDriftDetected>
+
+    <!-- Statistics are not schema. Deploying them causes noisy diffs. -->
+    <DropStatisticsNotInSource>False</DropStatisticsNotInSource>
+    <IgnoreExtendedProperties>False</IgnoreExtendedProperties>
+
+    <!-- The post-deploy MERGE over dim.Date can run long on a cold serverless
+         database that is resuming from auto-pause. -->
+    <CommandTimeout>600</CommandTimeout>
+    <DatabaseLockTimeout>60</DatabaseLockTimeout>
+
+    <DeployScriptFileName>EdwTaxi.Database.dev.sql</DeployScriptFileName>
+    <ProfileVersionNumber>1</ProfileVersionNumber>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,18 @@
+{
+    "name": "LS_ADLS_Lake",
+    "properties": {
+        "description": "The medallion lake, as seen from Synapse Studio. Lets analysts browse raw/ and curated/ in the Data hub and right-click a Parquet file to generate an OPENROWSET query, which is by far the fastest way to onboard someone to the lake. Runtime queries do NOT go through this linked service - they go through the EXTERNAL DATA SOURCEs in src/synapse/serverless/030_external_data_sources.sql - so a mistake here breaks the browsing experience, not the pipeline. Managed-identity auth; `url` is rewritten per environment by deployment/config-<env>.csv.",
+        "annotations": [
+            "lake",
+            "managed-identity"
+        ],
+        "type": "AzureBlobFS",
+        "typeProperties": {
+            "url": "https://REPLACED-BY-CONFIG-CSV.dfs.core.windows.net"
+        },
+        "connectVia": {
+            "referenceName": "AutoResolveIntegrationRuntime",
+            "type": "IntegrationRuntimeReference"
+        }
+    }
+}

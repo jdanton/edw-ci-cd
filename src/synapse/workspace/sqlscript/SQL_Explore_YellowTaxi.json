@@ -1,0 +1,21 @@
+{
+    "name": "SQL_Explore_YellowTaxi",
+    "properties": {
+        "description": "Onboarding script. Open this in Synapse Studio to see what the lake holds, how to query it without spending money, and what the curated layer threw away.",
+        "folder": {
+            "name": "EDW"
+        },
+        "content": {
+            "query": "/* =============================================================================\n   Exploring the NYC Taxi logical data warehouse\n   =============================================================================\n\n   Connect to: Built-in (serverless) / edw_lake\n\n   READ THIS FIRST - serverless bills per TERABYTE SCANNED, not per query and\n   not per hour. A careless SELECT * over the whole lake costs real money and\n   nobody will stop you. Two rules keep you safe:\n\n     1. ALWAYS filter on PickupYear and PickupMonth. They come from the folder\n        names, so the engine skips whole folders without opening a file.\n     2. Project only the columns you need. Parquet is columnar; SELECT * reads\n        every column.\n\n   Check what a query actually cost with query 6 at the bottom.\n============================================================================= */\n\n\n-- 1. Which partitions exist? Folder metadata only - costs nothing.\nSELECT PickupYear, PickupMonth, TripCount = COUNT_BIG(*)\nFROM curated.vw_YellowTaxiTrip\nGROUP BY PickupYear, PickupMonth\nORDER BY PickupYear, PickupMonth;\n\n\n-- 2. A first look at the data. Note the partition filter.\nSELECT TOP (100)\n    PickupDateTime, DropoffDateTime, TripDistanceMiles,\n    PassengerCount, FareAmount, TipAmount, TotalAmount\nFROM curated.vw_YellowTaxiTrip\nWHERE PickupYear = 2024 AND PickupMonth = 1\nORDER BY PickupDateTime;\n\n\n-- 3. Daily revenue, via the pre-shaped serving view.\nSELECT PickupDate, TripCount, TotalAmount, AvgTripMinutes\nFROM serving.vw_YellowTaxiTripDaily\nWHERE PickupYear = 2024 AND PickupMonth = 1\nORDER BY PickupDate;\n\n\n-- 4. Busiest pickup zones. Demonstrates the reference-data join.\nSELECT TOP (20)\n    PickupBorough, PickupZone,\n    TripCount = SUM(TripCount),\n    Revenue   = SUM(TotalAmount)\nFROM serving.vw_YellowTaxiTripByZone\nWHERE PickupYear = 2024 AND PickupMonth = 1\nGROUP BY PickupBorough, PickupZone\nORDER BY TripCount DESC;\n\n\n-- 5. What did the curated build reject, and why?\n--    Computed on demand against raw - nothing is stored for this.\nSELECT RejectReason, RejectedRows = COUNT_BIG(*)\nFROM curated.vw_YellowTaxiTrip_Rejected\nWHERE PickupYear = 2024 AND PickupMonth = 1\nGROUP BY RejectReason\nORDER BY RejectedRows DESC;\n\n\n-- 6. What did all of the above actually cost?\n--    data_processed_mb is the billable number.\nSELECT TOP (20)\n    SUBSTRING(command, 1, 120) AS CommandPreview,\n    start_time,\n    DurationMs      = total_elapsed_time,\n    DataProcessedMB = data_processed_mb\nFROM sys.dm_exec_requests_history\nORDER BY start_time DESC;\n\n\n-- 7. THE ANTI-PATTERN, for contrast. Do not run this on a full lake.\n--    Filtering on PickupDate alone cannot prune folders, so serverless opens\n--    every file in every month to find one day.\n--\n-- SELECT COUNT_BIG(*) FROM curated.vw_YellowTaxiTrip WHERE PickupDate = '2024-01-15';\n",
+            "metadata": {
+                "language": "sql"
+            },
+            "currentConnection": {
+                "databaseName": "edw_lake",
+                "poolName": "Built-in"
+            },
+            "resultLimit": 5000
+        },
+        "type": "SqlQuery"
+    }
+}

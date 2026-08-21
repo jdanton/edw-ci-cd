@@ -1,0 +1,14 @@
+{
+    "name": "LS_KeyVault",
+    "properties": {
+        "description": "Environment Key Vault, reachable from the workspace over a managed private endpoint (created by infra/terraform/modules/synapse). Nothing in the template resolves a secret through it today - Entra-only authentication means there are no passwords - but it is deployed so that the connectivity is proven and monitored before the first workload that genuinely needs a credential arrives.",
+        "annotations": [
+            "key-vault",
+            "managed-identity"
+        ],
+        "type": "AzureKeyVault",
+        "typeProperties": {
+            "baseUrl": "https://REPLACED-BY-CONFIG-CSV.vault.azure.net/"
+        }
+    }
+}

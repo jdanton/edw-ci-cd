@@ -1,0 +1,126 @@
+{
+    "name": "PL_Backfill_NycTaxi_Yellow",
+    "properties": {
+        "description": "Loads a RANGE of months by generating the (year, month) pairs between startYearMonth and endYearMonth and calling PL_Master_NycTaxi_Load for each. This is how you populate a brand-new environment: trigger it once with 202401 -> 202412 and walk away. isSequential is TRUE by design; see the comment on the ForEach activity.",
+        "folder": {
+            "name": "00 Master"
+        },
+        "annotations": [
+            "nyc-taxi",
+            "backfill",
+            "manual"
+        ],
+        "concurrency": 1,
+        "parameters": {
+            "startYearMonth": {
+                "type": "int",
+                "description": "Inclusive start as YYYYMM, e.g. 202401.",
+                "defaultValue": 202401
+            },
+            "endYearMonth": {
+                "type": "int",
+                "description": "Inclusive end as YYYYMM, e.g. 202403.",
+                "defaultValue": 202403
+            }
+        },
+        "variables": {
+            "monthCount": {
+                "type": "Integer"
+            }
+        },
+        "activities": [
+            {
+                "name": "Calculate Month Count",
+                "description": "Number of months in the inclusive range. YYYYMM is not a linear number - 202412 to 202501 is a difference of 89, not 1 - so convert to an absolute month ordinal (year*12 + month) before subtracting.",
+                "type": "SetVariable",
+                "dependsOn": [],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "variableName": "monthCount",
+                    "value": {
+                        "value": "@add(sub(add(mul(div(pipeline().parameters.endYearMonth, 100), 12), mod(pipeline().parameters.endYearMonth, 100)), add(mul(div(pipeline().parameters.startYearMonth, 100), 12), mod(pipeline().parameters.startYearMonth, 100))), 1)",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "Validate Range",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "Calculate Month Count",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@and(greater(variables('monthCount'), 0), lessOrEquals(variables('monthCount'), 120))",
+                        "type": "Expression"
+                    },
+                    "ifFalseActivities": [
+                        {
+                            "name": "Fail Invalid Range",
+                            "type": "Fail",
+                            "dependsOn": [],
+                            "typeProperties": {
+                                "message": {
+                                    "value": "@concat('Backfill range ', string(pipeline().parameters.startYearMonth), ' to ', string(pipeline().parameters.endYearMonth), ' resolves to ', string(variables('monthCount')), ' months. Expected between 1 and 120. Check that both parameters are YYYYMM and that start <= end.')",
+                                    "type": "Expression"
+                                },
+                                "errorCode": "BACKFILL_RANGE_INVALID"
+                            }
+                        }
+                    ],
+                    "ifTrueActivities": [
+                        {
+                            "name": "For Each Month",
+                            "description": "isSequential = true, deliberately. The three stages contend for the same resources - the same managed-VNet IR, the same serverless pool, the same staging table (which PL_Load_Sql_YellowTrip truncates). Running months in parallel would corrupt the staging load. If you need a faster backfill, raise dataIntegrationUnits on the copy activities rather than parallelising here.",
+                            "type": "ForEach",
+                            "dependsOn": [],
+                            "typeProperties": {
+                                "items": {
+                                    "value": "@range(0, variables('monthCount'))",
+                                    "type": "Expression"
+                                },
+                                "isSequential": true,
+                                "activities": [
+                                    {
+                                        "name": "Load One Month",
+                                        "description": "Converts the zero-based offset back into a (year, month) pair via an absolute month ordinal. The `sub(..., 1)` / `add(..., 1)` dance converts between 1-12 months and 0-11 arithmetic so that December does not become month 0 of the following year.",
+                                        "type": "ExecutePipeline",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "secureInput": false
+                                        },
+                                        "typeProperties": {
+                                            "pipeline": {
+                                                "referenceName": "PL_Master_NycTaxi_Load",
+                                                "type": "PipelineReference"
+                                            },
+                                            "waitOnCompletion": true,
+                                            "parameters": {
+                                                "puYear": {
+                                                    "value": "@div(add(add(mul(div(pipeline().parameters.startYearMonth, 100), 12), sub(mod(pipeline().parameters.startYearMonth, 100), 1)), item()), 12)",
+                                                    "type": "Expression"
+                                                },
+                                                "puMonth": {
+                                                    "value": "@add(mod(add(add(mul(div(pipeline().parameters.startYearMonth, 100), 12), sub(mod(pipeline().parameters.startYearMonth, 100), 1)), item()), 12), 1)",
+                                                    "type": "Expression"
+                                                }
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+}

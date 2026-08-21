@@ -1,0 +1,39 @@
+{
+    "name": "DS_Lake_Curated_Parquet",
+    "properties": {
+        "description": "Curated-layer Parquet, written by Synapse serverless CETAS and read by the Copy activity that loads Azure SQL. `schema` is deliberately EMPTY: an empty schema makes the Copy activity infer columns from the Parquet footer at run time, so adding a column to the CETAS output does not require an ADF artefact change. The trade-off is that a column rename silently produces NULLs in the sink instead of failing the pipeline - which is why etl.usp_RunDataQualityChecks in the serving database asserts on NULL rates. See docs/10-making-a-change.md for the full add-a-column walkthrough.",
+        "linkedServiceName": {
+            "referenceName": "LS_ADLS_Lake",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "fileSystem": {
+                "type": "string",
+                "defaultValue": "curated"
+            },
+            "folderPath": {
+                "type": "string"
+            }
+        },
+        "annotations": [
+            "lake",
+            "curated"
+        ],
+        "type": "Parquet",
+        "typeProperties": {
+            "location": {
+                "type": "AzureBlobFSLocation",
+                "fileSystem": {
+                    "value": "@dataset().fileSystem",
+                    "type": "Expression"
+                },
+                "folderPath": {
+                    "value": "@dataset().folderPath",
+                    "type": "Expression"
+                }
+            },
+            "compressionCodec": "snappy"
+        },
+        "schema": []
+    }
+}

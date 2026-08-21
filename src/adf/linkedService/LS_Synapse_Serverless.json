@@ -1,0 +1,23 @@
+{
+    "name": "LS_Synapse_Serverless",
+    "properties": {
+        "description": "Synapse SERVERLESS SQL pool (<workspace>-ondemand.sql.azuresynapse.net), database edw_lake. Used only by Script activities that run the CETAS build procedures - never as a Copy source, because serverless charges per TB scanned and streaming a large result set through it is the most expensive way to move data in this platform. Type is AzureSqlDW ('Azure Synapse Analytics'), which is correct for BOTH dedicated and serverless endpoints. Authenticates with the factory managed identity; the matching SQL login and grants are created by src/synapse/serverless/090_permissions.sql.",
+        "annotations": [
+            "synapse",
+            "serverless",
+            "managed-identity"
+        ],
+        "type": "AzureSqlDW",
+        "typeProperties": {
+            "server": "REPLACED-BY-CONFIG-CSV-ondemand.sql.azuresynapse.net",
+            "database": "edw_lake",
+            "encrypt": "mandatory",
+            "trustServerCertificate": false,
+            "authenticationType": "SystemAssignedManagedIdentity"
+        },
+        "connectVia": {
+            "referenceName": "IR-ManagedVNet",
+            "type": "IntegrationRuntimeReference"
+        }
+    }
+}

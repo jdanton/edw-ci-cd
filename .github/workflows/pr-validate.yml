@@ -1,0 +1,295 @@
+# =============================================================================
+# pr-validate.yml
+# =============================================================================
+#
+# Runs on every pull request. Nothing here changes anything in Azure - it uses
+# the READ-ONLY CI identity created by bootstrap/, which holds Reader on the
+# subscription and write access to nothing except the Terraform state lock blob.
+#
+# WHY THIS RUNS ON A SELF-HOSTED RUNNER
+# -------------------------------------
+# `terraform plan` is not purely a control-plane operation in this
+# configuration. Refreshing azurerm_storage_data_lake_gen2_filesystem and
+# azurerm_storage_data_lake_gen2_path calls the ADLS DATA plane, which has no
+# public endpoint. On a GitHub-hosted runner those refreshes hang and then
+# fail with a timeout that says nothing about networking.
+#
+# The jobs that genuinely need no Azure access at all (linting, the DACPAC
+# build) are separated out so they still give fast feedback if the runner pool
+# is busy.
+# =============================================================================
+
+name: PR validation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# The OIDC token is minted per job. contents:read is all the checkout needs;
+# pull-requests:write lets the plan be posted as a comment.
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  # One validation run per PR. A new push cancels the previous run rather than
+  # queueing behind it - a plan against superseded code helps nobody.
+  group: pr-validate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TERRAFORM_VERSION: '1.9.8'
+  ADF_TOOLS_VERSION: '1.11.0'
+
+jobs:
+
+  # ===========================================================================
+  # Fast, offline checks. No Azure, no runner-network dependency.
+  # ===========================================================================
+  lint:
+    name: Lint and static analysis
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: |
+          set -euo pipefail
+          echo "::group::Checking formatting"
+          if ! terraform fmt -check -recursive -diff; then
+            echo "::error::Terraform files are not formatted. Run: terraform fmt -recursive"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+      - name: terraform validate (root and every module)
+        run: |
+          set -euo pipefail
+          # -backend=false so validation needs no state and no credentials.
+          for dir in infra/terraform bootstrap infra/terraform/modules/*/; do
+            echo "::group::validate $dir"
+            terraform -chdir="$dir" init -backend=false -no-color
+            terraform -chdir="$dir" validate -no-color
+            echo "::endgroup::"
+          done
+
+      - name: Validate ADF and Synapse artefact JSON
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bad = 0
+          Get-ChildItem -Path src/adf, src/synapse -Filter *.json -Recurse | ForEach-Object {
+            try {
+              $null = Get-Content $_.FullName -Raw | ConvertFrom-Json
+            }
+            catch {
+              Write-Host "::error file=$($_.FullName)::Invalid JSON - $($_.Exception.Message)"
+              $bad++
+            }
+          }
+          if ($bad -gt 0) { exit 1 }
+          Write-Host "All artefact JSON parses."
+
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+            Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          }
+          $results = Invoke-ScriptAnalyzer -Path scripts -Recurse -Severity Error, Warning
+          if ($results) {
+            $results | ForEach-Object {
+              $level = if ($_.Severity -eq 'Error') { 'error' } else { 'warning' }
+              Write-Host "::$level file=$($_.ScriptPath),line=$($_.Line)::$($_.RuleName): $($_.Message)"
+            }
+            if ($results | Where-Object Severity -eq 'Error') { exit 1 }
+          }
+          Write-Host "PSScriptAnalyzer: no errors."
+
+  # ===========================================================================
+  # Build the DACPAC. This is a real compile: it catches a procedure that
+  # references a column that does not exist, which is otherwise a runtime
+  # failure at 03:00.
+  # ===========================================================================
+  build-database:
+    name: Build database project
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: dotnet build
+        run: |
+          set -euo pipefail
+          dotnet build src/sql/EdwTaxi.Database/EdwTaxi.Database.sqlproj \
+            -c Release \
+            -warnaserror \
+            --nologo
+
+      - name: Report DACPAC contents
+        shell: pwsh
+        run: |
+          $dacpac = 'src/sql/EdwTaxi.Database/bin/Release/EdwTaxi.Database.dacpac'
+          $size   = [math]::Round((Get-Item $dacpac).Length / 1KB, 1)
+
+          Add-Content $env:GITHUB_STEP_SUMMARY @"
+          ## Database project
+
+          Built ``EdwTaxi.Database.dacpac`` (${size} KB).
+
+          The build validates every reference in the model - a procedure naming a
+          column that does not exist fails here rather than at run time.
+          "@
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dacpac-pr-${{ github.event.pull_request.number || github.run_id }}
+          path: src/sql/EdwTaxi.Database/bin/Release/*.dacpac
+          retention-days: 5
+
+  # ===========================================================================
+  # terraform plan against dev, with the read-only identity.
+  # ===========================================================================
+  plan:
+    name: Plan (dev)
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 30
+    needs: [lint]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # The READ-ONLY identity. A pull request must never hold Contributor:
+      # a PR can change workflow files, and a workflow that can deploy is a
+      # workflow anyone with fork access can turn into a deployment.
+      - name: Azure login (read-only CI identity)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CI_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify private data plane is reachable
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # Advisory. If this fails, the plan below will fail too - but with a
+          # far less helpful message.
+          ./scripts/Test-PlatformConnectivity.ps1 -Environment dev -SkipTerraform `
+            -StorageAccountName '' -SqlServerFqdn '' -SynapseServerlessEndpoint ''
+
+      - name: terraform init
+        working-directory: infra/terraform
+        run: |
+          terraform init -reconfigure -no-color \
+            -backend-config=envs/dev/backend.hcl
+        env:
+          ARM_USE_OIDC: 'true'
+
+      - name: terraform plan
+        id: plan
+        working-directory: infra/terraform
+        run: |
+          set -euo pipefail
+          terraform plan -no-color -lock=false -input=false \
+            -var-file=envs/dev/dev.tfvars \
+            -out=tfplan 2>&1 | tee plan.txt
+          terraform show -no-color tfplan > plan-full.txt
+        env:
+          ARM_USE_OIDC: 'true'
+
+      - name: Summarise plan
+        if: always()
+        shell: pwsh
+        run: |
+          $plan = Get-Content infra/terraform/plan.txt -Raw -ErrorAction SilentlyContinue
+          if (-not $plan) { $plan = '(plan produced no output)' }
+
+          # Trim: a full plan for this platform runs to thousands of lines and
+          # GitHub truncates a step summary at 1 MB.
+          $lines = $plan -split "`n"
+          if ($lines.Count -gt 400) {
+            $plan = ($lines[0..200] -join "`n") +
+                    "`n`n... $($lines.Count - 400) lines omitted ...`n`n" +
+                    ($lines[-200..-1] -join "`n")
+          }
+
+          Add-Content $env:GITHUB_STEP_SUMMARY @"
+          ## Terraform plan - dev
+
+          <details><summary>Show plan</summary>
+
+          ``````hcl
+          $plan
+          ``````
+
+          </details>
+
+          > Planned with the READ-ONLY CI identity. Nothing was changed.
+          "@
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: terraform-plan-dev
+          path: |
+            infra/terraform/plan.txt
+            infra/terraform/plan-full.txt
+          retention-days: 5
+
+  # ===========================================================================
+  # Catch hard-coded endpoints in the committed deployment CSVs.
+  # ===========================================================================
+  verify-config:
+    name: Verify deployment configuration
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 15
+    needs: [lint]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Azure login (read-only CI identity)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CI_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: terraform init (dev)
+        working-directory: infra/terraform
+        run: terraform init -reconfigure -no-color -backend-config=envs/dev/backend.hcl
+        env:
+          ARM_USE_OIDC: 'true'
+
+      - name: Verify no hard-coded endpoints
+        shell: pwsh
+        run: ./scripts/New-DeploymentConfig.ps1 -Environment dev -Verify

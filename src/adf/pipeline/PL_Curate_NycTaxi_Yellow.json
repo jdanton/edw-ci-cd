@@ -1,0 +1,322 @@
+{
+    "name": "PL_Curate_NycTaxi_Yellow",
+    "properties": {
+        "description": "STAGE 2 of 3 - turn one month of raw Parquet into conformed, typed, deduplicated curated Parquet using Synapse SERVERLESS SQL. All the transformation lives in curated.usp_Build_Yellow_Monthly (src/synapse/serverless/070_procs_curate.sql), which runs CETAS. Note there is no Copy activity: data never passes through the integration runtime, so this stage costs Synapse TB-scanned and nothing else.\n\nTHE PURGE STEP IS NOT OPTIONAL. CETAS refuses to write into a folder that already contains files, and DROP EXTERNAL TABLE removes only the metadata - the Parquet files stay on disk. Serverless SQL has no DELETE and cannot remove them. So on any re-run, something outside Synapse must clear the folder first, and that something is the Delete activity below. Skip it and every re-run fails with 'Cannot create external table. External table location already exists', which is one of the least self-explanatory errors in the product.",
+        "folder": {
+            "name": "02 Curate"
+        },
+        "annotations": [
+            "nyc-taxi",
+            "curate",
+            "synapse-serverless"
+        ],
+        "concurrency": 1,
+        "parameters": {
+            "puYear": {
+                "type": "int",
+                "defaultValue": 2024
+            },
+            "puMonth": {
+                "type": "int",
+                "defaultValue": 1
+            }
+        },
+        "variables": {
+            "curatedPath": {
+                "type": "String"
+            }
+        },
+        "activities": [
+            {
+                "name": "Build Curated Path",
+                "description": "Partition column names here are PascalCase (PickupYear/PickupMonth) while the raw layer uses the source's own puYear/puMonth. That is deliberate: the raw layer mirrors the publisher's vocabulary, the curated layer uses ours. The rename is the first act of conforming.",
+                "type": "SetVariable",
+                "dependsOn": [],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "variableName": "curatedPath",
+                    "value": {
+                        "value": "@concat('nyctlc/yellow_trip/PickupYear=', string(pipeline().parameters.puYear), '/PickupMonth=', string(pipeline().parameters.puMonth))",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "Check Curated Partition Exists",
+                "description": "The Delete activity FAILS on a path that does not exist, so a first-ever run of a partition would break without this guard.",
+                "type": "GetMetadata",
+                "dependsOn": [
+                    {
+                        "activity": "Build Curated Path",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "dataset": {
+                        "referenceName": "DS_Lake_Binary",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "fileSystem": "curated",
+                            "folderPath": {
+                                "value": "@variables('curatedPath')",
+                                "type": "Expression"
+                            }
+                        }
+                    },
+                    "fieldList": [
+                        "exists"
+                    ],
+                    "storeSettings": {
+                        "type": "AzureBlobFSReadSettings",
+                        "recursive": false,
+                        "enablePartitionDiscovery": false
+                    },
+                    "formatSettings": {
+                        "type": "BinaryReadSettings"
+                    }
+                }
+            },
+            {
+                "name": "Purge Existing Partition",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "Check Curated Partition Exists",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@activity('Check Curated Partition Exists').output.exists",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "Delete Curated Partition",
+                            "description": "Clears the folder so CETAS can rewrite it. enableLogging writes a manifest of everything deleted to logs/adf-delete/ - cheap, and the only forensic record you will have if this ever removes something it should not have.",
+                            "type": "Delete",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.00:30:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "dataset": {
+                                    "referenceName": "DS_Lake_Binary",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "fileSystem": "curated",
+                                        "folderPath": {
+                                            "value": "@variables('curatedPath')",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                },
+                                "enableLogging": true,
+                                "logStorageSettings": {
+                                    "linkedServiceName": {
+                                        "referenceName": "LS_ADLS_Lake",
+                                        "type": "LinkedServiceReference"
+                                    },
+                                    "path": "logs/adf-delete"
+                                },
+                                "storeSettings": {
+                                    "type": "AzureBlobFSReadSettings",
+                                    "recursive": true,
+                                    "enablePartitionDiscovery": false
+                                },
+                                "recursive": true
+                            }
+                        }
+                    ],
+                    "ifFalseActivities": []
+                }
+            },
+            {
+                "name": "Build Curated Partition",
+                "description": "Script activity, NonQuery. Parameters are passed as typed Int32 bindings rather than concatenated into the SQL text: serverless executes whatever you give it, and a value that originated in a trigger payload is not something to trust. scriptBlockExecutionTimeout is 2h because a first CETAS over cold, Archive-tier raw data can genuinely take that long.",
+                "type": "Script",
+                "dependsOn": [
+                    {
+                        "activity": "Purge Existing Partition",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.03:00:00",
+                    "retry": 1,
+                    "retryIntervalInSeconds": 120,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_Synapse_Serverless",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "scripts": [
+                        {
+                            "type": "NonQuery",
+                            "text": "EXEC curated.usp_Build_Yellow_Monthly @puYear = @puYear, @puMonth = @puMonth;",
+                            "parameters": [
+                                {
+                                    "name": "puYear",
+                                    "type": "Int32",
+                                    "value": {
+                                        "value": "@pipeline().parameters.puYear",
+                                        "type": "Expression"
+                                    },
+                                    "direction": "Input"
+                                },
+                                {
+                                    "name": "puMonth",
+                                    "type": "Int32",
+                                    "value": {
+                                        "value": "@pipeline().parameters.puMonth",
+                                        "type": "Expression"
+                                    },
+                                    "direction": "Input"
+                                }
+                            ]
+                        }
+                    ],
+                    "scriptBlockExecutionTimeout": "02:00:00"
+                }
+            },
+            {
+                "name": "Verify Curated Row Count",
+                "description": "CETAS reports success even when it writes zero rows - for instance when the raw partition landed but every row failed the quality predicate. Reading the count back and failing on zero converts silent data loss into a loud pipeline failure, which is the entire point of having a curated layer.",
+                "type": "Script",
+                "dependsOn": [
+                    {
+                        "activity": "Build Curated Partition",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:30:00",
+                    "retry": 1,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_Synapse_Serverless",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "scripts": [
+                        {
+                            "type": "Query",
+                            "text": "SELECT CuratedRowCount = COUNT_BIG(*)\nFROM curated.vw_YellowTaxiTrip\nWHERE PickupYear = @puYear AND PickupMonth = @puMonth;",
+                            "parameters": [
+                                {
+                                    "name": "puYear",
+                                    "type": "Int32",
+                                    "value": {
+                                        "value": "@pipeline().parameters.puYear",
+                                        "type": "Expression"
+                                    },
+                                    "direction": "Input"
+                                },
+                                {
+                                    "name": "puMonth",
+                                    "type": "Int32",
+                                    "value": {
+                                        "value": "@pipeline().parameters.puMonth",
+                                        "type": "Expression"
+                                    },
+                                    "direction": "Input"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "Curated Partition Populated",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "Verify Curated Row Count",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@greater(int(string(activity('Verify Curated Row Count').output.resultSets[0].rows[0].CuratedRowCount)), 0)",
+                        "type": "Expression"
+                    },
+                    "ifFalseActivities": [
+                        {
+                            "name": "Fail Empty Curated Partition",
+                            "type": "Fail",
+                            "dependsOn": [],
+                            "typeProperties": {
+                                "message": {
+                                    "value": "@concat('curated.usp_Build_Yellow_Monthly produced 0 rows for ', string(pipeline().parameters.puYear), '-', string(pipeline().parameters.puMonth), '. The raw partition exists but every row was rejected. Query raw.vw_YellowTaxiTrip for that partition and review the quality predicates in src/synapse/serverless/070_procs_curate.sql.')",
+                                    "type": "Expression"
+                                },
+                                "errorCode": "CURATED_PARTITION_EMPTY"
+                            }
+                        }
+                    ],
+                    "ifTrueActivities": [
+                        {
+                            "name": "Return Curate Stats",
+                            "type": "SetVariable",
+                            "dependsOn": [],
+                            "policy": {
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "variableName": "pipelineReturnValue",
+                                "value": [
+                                    {
+                                        "key": "curatedRowCount",
+                                        "value": {
+                                            "type": "Expression",
+                                            "content": "@activity('Verify Curated Row Count').output.resultSets[0].rows[0].CuratedRowCount"
+                                        }
+                                    },
+                                    {
+                                        "key": "curatedPath",
+                                        "value": {
+                                            "type": "Expression",
+                                            "content": "@variables('curatedPath')"
+                                        }
+                                    }
+                                ],
+                                "setSystemVariable": true
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+}

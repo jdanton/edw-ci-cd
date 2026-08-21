@@ -1,0 +1,36 @@
+{
+    "name": "TR_Tumbling_NycTaxi_Reprocess",
+    "properties": {
+        "description": "Tumbling-window trigger over the same pipeline. NOT a duplicate of the schedule trigger - it solves a different problem. A schedule trigger fires and forgets: if 5 March fails, nothing re-runs it. A tumbling window trigger owns a contiguous, gap-free series of windows, tracks each window's state, supports `retryPolicy`, and can be re-run for a historical window from the ADF monitor with two clicks. That makes it the right tool for a warehouse where every month must eventually succeed. Left Stopped in ALL environments, including prod: starting it with startTime in the past causes ADF to immediately queue every window since that date, which on a 2019 start date means 70+ concurrent backfill runs. Read docs/06-data-factory.md#tumbling-windows before you start it.",
+        "annotations": [
+            "nyc-taxi",
+            "tumbling-window",
+            "reprocess"
+        ],
+        "runtimeState": "Stopped",
+        "pipeline": {
+            "pipelineReference": {
+                "referenceName": "PL_Master_NycTaxi_Load",
+                "type": "PipelineReference"
+            },
+            "parameters": {
+                "puYear": "@int(formatDateTime(trigger().outputs.windowStartTime, 'yyyy'))",
+                "puMonth": "@int(formatDateTime(trigger().outputs.windowStartTime, 'MM'))"
+            }
+        },
+        "type": "TumblingWindowTrigger",
+        "typeProperties": {
+            "frequency": "Month",
+            "interval": 1,
+            "startTime": "2024-01-01T00:00:00Z",
+            "endTime": "2026-01-01T00:00:00Z",
+            "delay": "35.00:00:00",
+            "maxConcurrency": 1,
+            "retryPolicy": {
+                "count": 2,
+                "intervalInSeconds": 3600
+            },
+            "dependsOn": []
+        }
+    }
+}

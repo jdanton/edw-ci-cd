@@ -1,0 +1,130 @@
+# ---------------------------------------------------------------------------
+# bootstrap/outputs.tf
+#
+# The outputs here are consumed three ways:
+#   1. `terraform output -raw backend_config_dev` -> paste into envs/dev/backend.tf
+#   2. `./scripts/Set-GitHubOidcSecrets.ps1` reads `github_configuration_json`
+#      and writes the variables/secrets into the GitHub repo via `gh`.
+#   3. Humans reading docs/02-bootstrap.md.
+# ---------------------------------------------------------------------------
+
+output "state_resource_group_name" {
+  description = "Resource group holding the Terraform state account."
+  value       = azurerm_resource_group.tfstate.name
+}
+
+output "state_storage_account_name" {
+  description = "Terraform state storage account name. Goes into every envs/*/backend.tf."
+  value       = azurerm_storage_account.tfstate.name
+}
+
+output "state_container_name" {
+  description = "Blob container holding one <env>.tfstate per environment."
+  value       = azurerm_storage_container.tfstate.name
+}
+
+output "backend_config" {
+  description = "Ready-to-paste backend block for each environment."
+  value = {
+    for env in keys(var.environments) : env => <<-EOT
+      terraform {
+        backend "azurerm" {
+          resource_group_name  = "${azurerm_resource_group.tfstate.name}"
+          storage_account_name = "${azurerm_storage_account.tfstate.name}"
+          container_name       = "${azurerm_storage_container.tfstate.name}"
+          key                  = "${env}.tfstate"
+          use_azuread_auth     = true
+          use_oidc             = true
+        }
+      }
+    EOT
+  }
+}
+
+output "deploy_client_ids" {
+  description = "Entra application (client) ID per environment. Set as the GitHub Environment variable AZURE_CLIENT_ID."
+  value       = { for k, v in azuread_application.deploy : k => v.client_id }
+}
+
+output "deploy_principal_ids" {
+  description = "Service principal object IDs per environment. Useful when granting extra RBAC by hand."
+  value       = { for k, v in azuread_service_principal.deploy : k => v.object_id }
+}
+
+output "ci_client_id" {
+  description = "Read-only CI application (client) ID. Set as the repository variable AZURE_CI_CLIENT_ID."
+  value       = azuread_application.ci.client_id
+}
+
+output "sql_admin_group_ids" {
+  description = "Object ID of the Entra group that is the Azure SQL administrator, per environment. Feed into infra/terraform var `sql_aad_admin_object_id`."
+  value       = { for k, v in azuread_group.sql_admins : k => v.object_id }
+}
+
+output "sql_admin_group_names" {
+  description = "Display name of the Azure SQL admin group, per environment. Terraform needs both the name and the object ID."
+  value       = { for k, v in azuread_group.sql_admins : k => v.display_name }
+}
+
+output "synapse_admin_group_ids" {
+  description = "Object ID of the Synapse administrator Entra group, per environment."
+  value       = { for k, v in azuread_group.synapse_admins : k => v.object_id }
+}
+
+output "synapse_admin_group_names" {
+  description = "Display name of the Synapse administrator Entra group, per environment."
+  value       = { for k, v in azuread_group.synapse_admins : k => v.display_name }
+}
+
+output "tenant_id" {
+  description = "Entra tenant ID. Repository variable AZURE_TENANT_ID."
+  value       = var.tenant_id
+}
+
+output "subscription_id" {
+  description = "Azure subscription ID. Repository variable AZURE_SUBSCRIPTION_ID."
+  value       = var.subscription_id
+}
+
+# ---------------------------------------------------------------------------
+# Machine-readable bundle consumed by scripts/Set-GitHubOidcSecrets.ps1
+# ---------------------------------------------------------------------------
+output "github_configuration_json" {
+  description = "Everything the GitHub repo needs, as JSON. Pipe to scripts/Set-GitHubOidcSecrets.ps1."
+  value = jsonencode({
+    repository = "${var.github_owner}/${var.github_repository}"
+    repositoryVariables = {
+      AZURE_TENANT_ID         = var.tenant_id
+      AZURE_SUBSCRIPTION_ID   = var.subscription_id
+      AZURE_CI_CLIENT_ID      = azuread_application.ci.client_id
+      TFSTATE_RESOURCE_GROUP  = azurerm_resource_group.tfstate.name
+      TFSTATE_STORAGE_ACCOUNT = azurerm_storage_account.tfstate.name
+      TFSTATE_CONTAINER       = azurerm_storage_container.tfstate.name
+    }
+    environments = {
+      for env in keys(var.environments) : env => {
+        variables = {
+          AZURE_CLIENT_ID = azuread_application.deploy[env].client_id
+        }
+      }
+    }
+  })
+}
+
+# ---------------------------------------------------------------------------
+# Values that must be carried into infra/terraform/envs/<env>/<env>.tfvars
+# ---------------------------------------------------------------------------
+output "tfvars_fragments" {
+  description = "Per-environment tfvars fragment produced by bootstrap. Append to infra/terraform/envs/<env>/<env>.tfvars."
+  value = {
+    for env in keys(var.environments) : env => <<-EOT
+      # ---- generated by bootstrap/ - do not edit by hand ----
+      sql_aad_admin_object_id     = "${azuread_group.sql_admins[env].object_id}"
+      sql_aad_admin_login         = "${azuread_group.sql_admins[env].display_name}"
+      synapse_aad_admin_object_id = "${azuread_group.synapse_admins[env].object_id}"
+      synapse_aad_admin_login     = "${azuread_group.synapse_admins[env].display_name}"
+      tenant_id                   = "${var.tenant_id}"
+      subscription_id             = "${var.subscription_id}"
+    EOT
+  }
+}

@@ -1,0 +1,37 @@
+{
+    "name": "DS_Lake_Binary",
+    "properties": {
+        "description": "Generic parameterised BINARY dataset over any lake filesystem. Serves three jobs: the raw-ingest sink, Get Metadata existence checks, and the Delete activity that purges a curated partition before CETAS rewrites it. Parameterised down to the folder so a single dataset serves every source system: pass fileSystem='raw', folderPath='nyctlc/yellow/puYear=2024/puMonth=1'. Layout convention is <source>/<entity>/<partition-columns>/ - Hive-style key=value partitioning, because Synapse serverless can then prune on filepath() without reading the files.",
+        "linkedServiceName": {
+            "referenceName": "LS_ADLS_Lake",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "fileSystem": {
+                "type": "string",
+                "defaultValue": "raw"
+            },
+            "folderPath": {
+                "type": "string"
+            }
+        },
+        "annotations": [
+            "lake",
+            "raw"
+        ],
+        "type": "Binary",
+        "typeProperties": {
+            "location": {
+                "type": "AzureBlobFSLocation",
+                "fileSystem": {
+                    "value": "@dataset().fileSystem",
+                    "type": "Expression"
+                },
+                "folderPath": {
+                    "value": "@dataset().folderPath",
+                    "type": "Expression"
+                }
+            }
+        }
+    }
+}

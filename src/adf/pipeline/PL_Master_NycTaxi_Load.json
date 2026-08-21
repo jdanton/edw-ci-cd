@@ -1,0 +1,160 @@
+{
+    "name": "PL_Master_NycTaxi_Load",
+    "properties": {
+        "description": "Orchestrator. Runs ingest -> curate -> load for ONE month, strictly sequentially, and is the only pipeline the schedule trigger calls. Keeping orchestration separate from work means each stage can be re-run in isolation during an incident without editing anything. Default parameters resolve to the month that is TWO months behind the trigger time, because the NYC TLC publishes on roughly a two-month lag - see the comment on defaultValue below.",
+        "folder": {
+            "name": "00 Master"
+        },
+        "annotations": [
+            "nyc-taxi",
+            "master",
+            "orchestration"
+        ],
+        "concurrency": 1,
+        "parameters": {
+            "puYear": {
+                "type": "int",
+                "defaultValue": 2024
+            },
+            "puMonth": {
+                "type": "int",
+                "defaultValue": 1
+            }
+        },
+        "activities": [
+            {
+                "name": "Ingest Raw",
+                "type": "ExecutePipeline",
+                "dependsOn": [],
+                "policy": {
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "PL_Ingest_NycTaxi_Yellow",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "puYear": {
+                            "value": "@pipeline().parameters.puYear",
+                            "type": "Expression"
+                        },
+                        "puMonth": {
+                            "value": "@pipeline().parameters.puMonth",
+                            "type": "Expression"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "Build Curated",
+                "type": "ExecutePipeline",
+                "dependsOn": [
+                    {
+                        "activity": "Ingest Raw",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "PL_Curate_NycTaxi_Yellow",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "puYear": {
+                            "value": "@pipeline().parameters.puYear",
+                            "type": "Expression"
+                        },
+                        "puMonth": {
+                            "value": "@pipeline().parameters.puMonth",
+                            "type": "Expression"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "Load Warehouse",
+                "type": "ExecutePipeline",
+                "dependsOn": [
+                    {
+                        "activity": "Build Curated",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "PL_Load_Sql_YellowTrip",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "puYear": {
+                            "value": "@pipeline().parameters.puYear",
+                            "type": "Expression"
+                        },
+                        "puMonth": {
+                            "value": "@pipeline().parameters.puMonth",
+                            "type": "Expression"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "Summarise Run",
+                "description": "Reads the child pipelines' return values back and emits them as this pipeline's own return value, so the ADF monitor - and anything reading ADFPipelineRun in Log Analytics - has one place to see files in, rows curated, rows loaded for the whole chain.",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "Load Warehouse",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "variableName": "pipelineReturnValue",
+                    "value": [
+                        {
+                            "key": "partition",
+                            "value": {
+                                "type": "Expression",
+                                "content": "@concat(string(pipeline().parameters.puYear), '-', formatNumber(pipeline().parameters.puMonth, '00'))"
+                            }
+                        },
+                        {
+                            "key": "filesIngested",
+                            "value": {
+                                "type": "Expression",
+                                "content": "@activity('Ingest Raw').output.pipelineReturnValue.filesCopied"
+                            }
+                        },
+                        {
+                            "key": "curatedRowCount",
+                            "value": {
+                                "type": "Expression",
+                                "content": "@activity('Build Curated').output.pipelineReturnValue.curatedRowCount"
+                            }
+                        }
+                    ],
+                    "setSystemVariable": true
+                }
+            }
+        ]
+    }
+}

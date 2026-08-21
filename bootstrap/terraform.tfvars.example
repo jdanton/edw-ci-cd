@@ -1,0 +1,82 @@
+# ---------------------------------------------------------------------------
+# bootstrap/terraform.tfvars.example
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#   # edit, then:
+#   terraform init && terraform apply
+#
+# terraform.tfvars is gitignored. Nothing secret lives in it, but it is
+# environment-specific and should not be committed to a template repo.
+# ---------------------------------------------------------------------------
+
+# az account show --query id -o tsv
+subscription_id = "00000000-0000-0000-0000-000000000000"
+
+# az account show --query tenantId -o tsv
+tenant_id = "11111111-1111-1111-1111-111111111111"
+
+# Short token stamped into every resource name. Keep <= 8 chars.
+project = "edwtaxi"
+
+# Region for the state account. Environments may live elsewhere.
+location = "eastus2"
+
+# The GitHub repository that will run the pipelines. These two values become
+# part of the OIDC subject claim, so they must match exactly (case-sensitive).
+github_owner      = "your-org"
+github_repository = "edw-ci-cd"
+
+default_branch = "main"
+
+# az ad signed-in-user show --query id -o tsv
+human_admin_object_ids = [
+  "22222222-2222-2222-2222-222222222222",
+]
+
+# ---------------------------------------------------------------------------
+# Environments
+#
+# deploy_scope = "subscription" lets Terraform create its own resource groups.
+# Switch to "resource_group" + existing_resource_group_name in tenants where
+# subscription-level Contributor cannot be granted to a service principal.
+# ---------------------------------------------------------------------------
+environments = {
+  dev = {
+    deploy_scope               = "subscription"
+    restrict_to_default_branch = false
+  }
+  test = {
+    deploy_scope               = "subscription"
+    restrict_to_default_branch = true
+  }
+  prod = {
+    deploy_scope               = "subscription"
+    restrict_to_default_branch = true
+    # Production DBA on-call rota, for example.
+    additional_admin_object_ids = []
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Lock the state account to your self-hosted runner's egress IP.
+#
+# Because your runners already sit in a VNet, find the egress IP with:
+#   az network nat gateway show -g <rg> -n <natgw> --query publicIpAddresses
+# or, from a job on the runner:
+#   curl -s https://api.ipify.org
+#
+# Leave empty on day one; tighten once the runners are proven.
+# ---------------------------------------------------------------------------
+state_storage_allowed_ips = [
+  # "203.0.113.10",
+]
+
+state_storage_replication = "GRS"
+
+tags = {
+  workload    = "edw-platform"
+  layer       = "bootstrap"
+  managed-by  = "terraform"
+  cost-center = "FIN-1234"
+  owner       = "data-platform@your-org.com"
+}
