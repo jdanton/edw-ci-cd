@@ -279,6 +279,31 @@ If you ran `sudo mkdir -p /usr/share/dotnet` while debugging this, remove the
 empty directory (`sudo rmdir /usr/share/dotnet`) — leaving it behind changes how
 `install-dotnet.sh` behaves if anyone reinstates the action.
 
+**Az PowerShell modules are needed by two workflows.**
+
+`azure/login`'s `enable-AzPSSession: true` imports `Az.Accounts` to call
+`Connect-AzAccount`, and it must already be installed. GitHub-hosted runners
+ship the Az modules; a self-hosted Ubuntu runner does not, and the action fails
+with an error that names neither PowerShell nor the missing module:
+
+```
+Running Azure PowerShell Login.
+{ Success: false, Error: "Cannot bind argument to parameter 'Name' because it is null." }
+```
+
+Only `adf-cd` and `synapse-cd` need it — `azure.datafactory.tools` and
+`azure.synapse.tools` are built on the Az cmdlets. Every other workflow uses the
+`az` CLI, which `azure/login` authenticates without any PowerShell session, so
+they deliberately do **not** set the flag. Requesting a session you never use
+turns a missing module into a failed deployment.
+
+Those two workflows install the modules on demand. Pre-installing skips ~60s per
+run:
+
+```bash
+pwsh -c "Install-Module Az.Accounts, Az.DataFactory, Az.Synapse -Scope AllUsers -Force"
+```
+
 The workflows *do* install `sqlpackage`, `SqlServer`, `azure.datafactory.tools`
 and `azure.synapse.tools` on demand, into writable per-user locations
 (`~/.dotnet/tools` and the PowerShell `CurrentUser` scope). Pre-installing those

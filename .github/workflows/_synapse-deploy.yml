@@ -80,6 +80,28 @@ jobs:
           terraform_version: ${{ inputs.terraform_version }}
           terraform_wrapper: false
 
+      # azure/login's enable-AzPSSession requires Az.Accounts to ALREADY be
+      # present - the action imports it to call Connect-AzAccount. GitHub-hosted
+      # runners ship the Az modules preinstalled; a self-hosted Ubuntu runner
+      # does not, and the action then fails with the thoroughly unhelpful
+      #
+      #   Cannot bind argument to parameter 'Name' because it is null.
+      #
+      # Pre-install them on the runner to skip this step's ~60s.
+      - name: Ensure Az PowerShell modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($m in @('Az.Accounts','Az.Synapse')) {
+            $found = Get-Module -ListAvailable -Name $m | Select-Object -First 1
+            if ($found) {
+              Write-Host "$m $($found.Version) already present"
+            } else {
+              Write-Host "installing $m ..."
+              Install-Module $m -Scope CurrentUser -Force -AllowClobber -Repository PSGallery
+            }
+          }
+
       - uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}

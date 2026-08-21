@@ -104,7 +104,11 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          enable-AzPSSession: true
+          # No enable-AzPSSession here on purpose: this job runs terraform and nothing else,
+          # which azure/login has already authenticated. Requesting a PowerShell
+          # session would require the Az modules to be installed on the runner and
+          # fails on a self-hosted Ubuntu box with the opaque error
+          #   Cannot bind argument to parameter 'Name' because it is null.
 
       - name: terraform init
         working-directory: infra/terraform
