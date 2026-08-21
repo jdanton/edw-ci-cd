@@ -67,6 +67,50 @@ link_private_dns_to_runner_vnet = true
 If the runner VNet uses custom DNS, linking does nothing — the VMs ask your
 servers. See [05-runner-connectivity](05-runner-connectivity.md#custom-dns).
 
+### `VnetAddressSpaceOverlapsWithAlreadyPeeredVnet` after a rebuild {#stale-peering}
+
+```
+Cannot create or update peering ... because address space of the first virtual
+network overlaps with address space of virtual network .../vnet-edwtaxi-dev
+already peered with the second.
+```
+
+...and the VNet it names does not exist:
+
+```bash
+az network vnet show -g <old-rg> -n vnet-edwtaxi-dev
+# ResourceNotFound
+```
+
+The spoke VNet is gone but the RUNNER-SIDE half of the peering survived it, in
+state `Disconnected`. **A disconnected peering still counts for the overlap
+check**, so a rebuild using the same address space is refused.
+
+This happens whenever the spoke resource group is deleted outside Terraform -
+`az group delete`, or a portal deletion. Terraform created both halves of the
+peering, but only the spoke half lived in that resource group; the half in the
+runner's resource group is orphaned with nothing left to clean it up.
+
+Find and remove it:
+
+```bash
+az network vnet peering list -g <runner-rg> --vnet-name <runner-vnet> \
+  --query "[].{name:name, state:peeringState}" -o table
+
+az network vnet peering delete -g <runner-rg> --vnet-name <runner-vnet> -n <name>
+```
+
+The failure cascades and the peering error is easy to miss among the noise.
+Without a peering there is no route, so every data-plane resource fails at
+once - filesystems time out against the private endpoint IP, and Key Vault
+reports "Public network access is disabled and request is not from a trusted
+service nor via an approved private link". Those look like separate faults and
+are one.
+
+**Prefer `terraform destroy` to `az group delete`** for exactly this reason: it
+removes both halves of the peering. Reach for the group delete only when a
+destroy is stuck, and clean up the runner-side peering by hand afterwards.
+
 ### Resolves privately but times out
 
 ```
