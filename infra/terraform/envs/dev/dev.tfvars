@@ -204,3 +204,18 @@ deployer_principal_id = "73eb8ae2-62c8-44a2-aef6-a44361fdbcb9"
 # lose Terraform state you need this value to import rather than recreate.
 # ---------------------------------------------------------------------------
 name_suffix = "65ri"
+
+# ---------------------------------------------------------------------------
+# Explicit resource group name.
+#
+# Deleting a managed-VNet Synapse workspace can take 30-60 minutes, and while
+# it runs the whole RESOURCE GROUP sits in provisioningState = Deleting -
+# nothing can be created in it, whatever you call the resources. Azure puts a
+# deny assignment on the Synapse-managed resource group, so the teardown cannot
+# be hurried.
+#
+# Naming the group explicitly means a rebuild can start immediately in a fresh
+# one while the old finishes dying. Bump the numeric suffix if it happens
+# again; there is nothing precious about the name.
+# ---------------------------------------------------------------------------
+resource_group_name = "rg-edwtaxi-dev-eus-2"
