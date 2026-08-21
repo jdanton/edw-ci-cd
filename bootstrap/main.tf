@@ -373,6 +373,16 @@ resource "azurerm_role_assignment" "deploy_rbac_admin" {
   #   ba92f5b4-2d11-453d-a403-e96b0029c9fe  Storage Blob Data Contributor
   #   2a2b9908-6ea1-4ae2-8e65-a410df84e7d1  Storage Blob Data Reader
   #   4633458b-17de-408a-b874-0445c86b69e6  Key Vault Secrets User
+  #   b86a8fe4-44ce-4948-aee5-eccb2c155cd7  Key Vault Secrets Officer
+  #
+  # KEEP THIS LIST IN STEP WITH infra/terraform. Secrets Officer was missing
+  # and the dev apply died at secrets.tf with the condition refusing the very
+  # assignment this repository makes:
+  #
+  #   AuthorizationFailed: ... has an authorization with ABAC condition that is
+  #   not fulfilled to perform action Microsoft.Authorization/roleAssignments/write
+  #
+  # To audit: grep -rhoE 'role_definition_name *= *"[^"]+"' infra/terraform
   #   b24988ac-6180-42a0-ab88-20f7382dd24c  Contributor (for MI on child scopes)
   #   acdd72a7-3385-48ef-bd42-f606fba81ae7  Reader
   condition_version = "2.0"
@@ -383,7 +393,7 @@ resource "azurerm_role_assignment" "deploy_rbac_admin" {
      )
      OR
      (
-      @Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals{ba92f5b4-2d11-453d-a403-e96b0029c9fe, 2a2b9908-6ea1-4ae2-8e65-a410df84e7d1, 4633458b-17de-408a-b874-0445c86b69e6, b24988ac-6180-42a0-ab88-20f7382dd24c, acdd72a7-3385-48ef-bd42-f606fba81ae7}
+      @Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals{ba92f5b4-2d11-453d-a403-e96b0029c9fe, 2a2b9908-6ea1-4ae2-8e65-a410df84e7d1, 4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7, b24988ac-6180-42a0-ab88-20f7382dd24c, acdd72a7-3385-48ef-bd42-f606fba81ae7}
      )
     )
     AND
@@ -393,7 +403,7 @@ resource "azurerm_role_assignment" "deploy_rbac_admin" {
      )
      OR
      (
-      @Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals{ba92f5b4-2d11-453d-a403-e96b0029c9fe, 2a2b9908-6ea1-4ae2-8e65-a410df84e7d1, 4633458b-17de-408a-b874-0445c86b69e6, b24988ac-6180-42a0-ab88-20f7382dd24c, acdd72a7-3385-48ef-bd42-f606fba81ae7}
+      @Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals{ba92f5b4-2d11-453d-a403-e96b0029c9fe, 2a2b9908-6ea1-4ae2-8e65-a410df84e7d1, 4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7, b24988ac-6180-42a0-ab88-20f7382dd24c, acdd72a7-3385-48ef-bd42-f606fba81ae7}
      )
     )
   EOT

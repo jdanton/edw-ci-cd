@@ -70,7 +70,17 @@ resource "azurerm_storage_account" "this" {
   }
 
   blob_properties {
-    versioning_enabled       = true
+    # NO versioning_enabled. Blob versioning is mutually exclusive with a
+    # hierarchical namespace, and Azure rejects the account outright:
+    #
+    #   Error: `versioning_enabled` can't be true when `is_hns_enabled` is true
+    #
+    # Versioning is a flat-namespace feature; HNS gives you directory semantics
+    # and ACLs instead. Soft delete below is the protection that DOES work here,
+    # and it covers the realistic accident (a deleted blob or container).
+    #
+    # This is also why the lifecycle policy has no `version { }` actions - they
+    # would be inert without versioning, and the provider would reject them.
     change_feed_enabled      = false
     last_access_time_enabled = true
 
@@ -252,9 +262,6 @@ resource "azurerm_storage_management_policy" "this" {
         delete_after_days_since_creation_greater_than = 30
       }
 
-      version {
-        delete_after_days_since_creation = 30
-      }
     }
   }
 
@@ -290,9 +297,6 @@ resource "azurerm_storage_management_policy" "this" {
         tier_to_cool_after_days_since_last_access_time_greater_than = 90
       }
 
-      version {
-        delete_after_days_since_creation = 14
-      }
     }
   }
 

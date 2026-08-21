@@ -68,6 +68,21 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "adf_pipeline_overrunn
   severity    = var.environment == "prod" ? 2 : 4
   enabled     = true
 
+  # Azure validates the KQL against the workspace schema when the rule is
+  # CREATED. On a new workspace the table does not exist yet - nothing has
+  # logged to it - so validation fails with a semantic error naming a column:
+  #
+  #   'summarize' operator: Failed to resolve scalar expression named
+  #   'DataProcessedBytes'. A semantic error occurred.
+  #
+  # The column name is correct; the TABLE is absent. It appears the first time
+  # a pipeline runs (ADFPipelineRun) or a serverless query executes
+  # (SynapseBuiltinSqlPoolRequestsEnded), which is necessarily after the
+  # infrastructure that produces it exists. Skipping validation is the only way
+  # to define these alerts before the first workload runs; the trade is that a
+  # genuine typo in the KQL is caught at evaluation time rather than at apply.
+  skip_query_validation = true
+
   scopes                  = [var.log_analytics_workspace_id]
   evaluation_frequency    = "PT15M"
   window_duration         = "PT6H"
@@ -121,6 +136,21 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "synapse_data_processe
   description = "Synapse serverless processed more than ${var.serverless_data_processed_gb_threshold} GB in one hour. Runbook: docs/11-operations-runbook.md#serverless-cost-spike"
   severity    = 3
   enabled     = true
+
+  # Azure validates the KQL against the workspace schema when the rule is
+  # CREATED. On a new workspace the table does not exist yet - nothing has
+  # logged to it - so validation fails with a semantic error naming a column:
+  #
+  #   'summarize' operator: Failed to resolve scalar expression named
+  #   'DataProcessedBytes'. A semantic error occurred.
+  #
+  # The column name is correct; the TABLE is absent. It appears the first time
+  # a pipeline runs (ADFPipelineRun) or a serverless query executes
+  # (SynapseBuiltinSqlPoolRequestsEnded), which is necessarily after the
+  # infrastructure that produces it exists. Skipping validation is the only way
+  # to define these alerts before the first workload runs; the trade is that a
+  # genuine typo in the KQL is caught at evaluation time rather than at apply.
+  skip_query_validation = true
 
   scopes                  = [var.log_analytics_workspace_id]
   evaluation_frequency    = "PT1H"
