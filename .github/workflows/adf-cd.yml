@@ -1,0 +1,301 @@
+# =============================================================================
+# adf-cd.yml
+# =============================================================================
+#
+# Deploys the ADF artefacts in src/adf using azure.datafactory.tools.
+#
+# DEPLOYING FROM THE COLLABORATION BRANCH, NOT adf_publish
+# --------------------------------------------------------
+# ADF's built-in Git integration offers two deployment sources:
+#
+#   adf_publish branch   ADF generates an ARM template when someone clicks
+#                        "Publish" in Studio. The classic approach, and the
+#                        reason so many teams end up with a 40,000-line ARM
+#                        template and an ARMTemplateParametersForFactory.json
+#                        nobody understands.
+#
+#   collaboration branch The artefact JSON as authored. What this template uses.
+#
+# The second is better for three concrete reasons:
+#
+#   1. NO CLICKING. With adf_publish, a deployment cannot happen until a human
+#      opens Studio and presses Publish. That is not continuous delivery, and it
+#      means the deployed artefact does not correspond to any reviewed commit.
+#
+#   2. REVIEWABLE DIFFS. A pull request shows "added a retry policy to the copy
+#      activity". The ARM-template equivalent shows a few hundred lines of
+#      re-serialised template with the change buried inside.
+#
+#   3. GRANULARITY. azure.datafactory.tools deploys artefact by artefact, so a
+#      single broken linked service fails on its own instead of rolling back an
+#      entire ARM deployment.
+#
+# The cost: `Publish` in Studio must be disabled for the dev factory
+# (publishing_enabled = false in the Terraform github_configuration), or
+# somebody will click it and generate an adf_publish branch nobody consumes.
+# =============================================================================
+
+name: Data Factory CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/adf/**'
+      - 'scripts/Deploy-DataFactory.ps1'
+      - 'scripts/New-DeploymentConfig.ps1'
+      - '.github/workflows/adf-cd.yml'
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'all'
+        type: choice
+        options: [all, dev, test, prod]
+      dry_run:
+        description: 'Report what would be deployed without deploying'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: adf-cd
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: '1.9.8'
+  ADF_TOOLS_VERSION: '1.11.0'
+
+jobs:
+
+  validate:
+    name: Validate artefacts
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Test-AdfCode is the module's own static validator. It catches what a
+      # JSON parse cannot: a dataset referencing a linked service that does not
+      # exist, an activity naming a missing pipeline, a trigger pointing at a
+      # deleted pipeline. Every one of those deploys "successfully" and then
+      # fails at run time.
+      - name: Test-AdfCode
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if (-not (Get-Module -ListAvailable azure.datafactory.tools |
+                    Where-Object Version -eq [version]'${{ env.ADF_TOOLS_VERSION }}')) {
+            Install-Module azure.datafactory.tools -RequiredVersion '${{ env.ADF_TOOLS_VERSION }}' `
+                           -Scope CurrentUser -Force -AllowClobber
+          }
+          Import-Module azure.datafactory.tools -RequiredVersion '${{ env.ADF_TOOLS_VERSION }}' -Force
+
+          $result = Test-AdfCode -RootFolder src/adf
+
+          if ($result -and $result.ErrorCount -gt 0) {
+            Write-Host "::error::Test-AdfCode reported $($result.ErrorCount) error(s)."
+            exit 1
+          }
+          Write-Host 'ADF artefact validation passed.'
+
+      - name: Report artefact inventory
+        shell: pwsh
+        run: |
+          $rows = Get-ChildItem src/adf -Directory |
+                  Where-Object Name -ne 'deployment' |
+                  ForEach-Object {
+                    [pscustomobject]@{
+                      Type  = $_.Name
+                      Count = (Get-ChildItem $_.FullName -Filter *.json -Recurse).Count
+                    }
+                  }
+
+          $table = ($rows | ForEach-Object { "| $($_.Type) | $($_.Count) |" }) -join "`n"
+
+          Add-Content $env:GITHUB_STEP_SUMMARY @"
+          ## ADF artefacts
+
+          | Type | Count |
+          |---|---|
+          $table
+
+          > ``integrationRuntime`` and ``managedVirtualNetwork`` are owned by
+          > Terraform and excluded from publication. See
+          > ``src/adf/deployment/publish-options.json``.
+          "@
+
+  dev:
+    name: Deploy to dev
+    needs: [validate]
+    if: |
+      github.event_name == 'push' ||
+      inputs.environment == 'all' ||
+      inputs.environment == 'dev'
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 45
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          # azure.datafactory.tools is built on the Az PowerShell modules, so
+          # an authenticated Az context is required. Without this flag only the
+          # Azure CLI is signed in and the module fails with
+          # "Run Connect-AzAccount to login".
+          enable-AzPSSession: true
+
+      - name: terraform init (read outputs)
+        working-directory: infra/terraform
+        run: terraform init -reconfigure -no-color -backend-config=envs/dev/backend.hcl
+        env:
+          ARM_USE_OIDC: 'true'
+
+      - name: Deploy
+        shell: pwsh
+        run: |
+          $splat = @{ Environment = 'dev'; ModuleVersion = '${{ env.ADF_TOOLS_VERSION }}' }
+          if ('${{ inputs.dry_run }}' -eq 'true') { $splat['WhatIf'] = $true }
+          ./scripts/Deploy-DataFactory.ps1 @splat
+
+  test:
+    name: Deploy to test
+    needs: [dev]
+    if: |
+      always() &&
+      (needs.dev.result == 'success' || needs.dev.result == 'skipped') &&
+      (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'test')
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 45
+    environment: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+      - name: terraform init (read outputs)
+        working-directory: infra/terraform
+        run: terraform init -reconfigure -no-color -backend-config=envs/test/backend.hcl
+        env:
+          ARM_USE_OIDC: 'true'
+      - name: Deploy
+        shell: pwsh
+        run: |
+          $splat = @{ Environment = 'test'; ModuleVersion = '${{ env.ADF_TOOLS_VERSION }}' }
+          if ('${{ inputs.dry_run }}' -eq 'true') { $splat['WhatIf'] = $true }
+          ./scripts/Deploy-DataFactory.ps1 @splat
+
+  prod:
+    name: Deploy to prod
+    needs: [test]
+    if: |
+      always() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'prod')
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 45
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: terraform init (read outputs)
+        working-directory: infra/terraform
+        run: terraform init -reconfigure -no-color -backend-config=envs/prod/backend.hcl
+        env:
+          ARM_USE_OIDC: 'true'
+
+      # In prod the trigger is STARTED (config-prod.csv). azure.datafactory.tools
+      # stops every trigger before publishing and restarts the ones that should
+      # run - ADF refuses to modify a pipeline referenced by a running trigger.
+      # Record the before state so an interrupted deployment can be reconciled.
+      - name: Record trigger state before deployment
+        shell: pwsh
+        run: |
+          $rg  = terraform -chdir=infra/terraform output -raw resource_group_name
+          $adf = terraform -chdir=infra/terraform output -raw data_factory_name
+
+          $triggers = az datafactory trigger list `
+                        --resource-group $rg --factory-name $adf `
+                        --query "[].{name:name, state:properties.runtimeState}" -o json |
+                      ConvertFrom-Json
+
+          $table = ($triggers | ForEach-Object { "| ``$($_.name)`` | $($_.state) |" }) -join "`n"
+
+          Add-Content $env:GITHUB_STEP_SUMMARY @"
+          ### Trigger state BEFORE deployment
+
+          | Trigger | State |
+          |---|---|
+          $table
+          "@
+
+      - name: Deploy
+        shell: pwsh
+        run: |
+          $splat = @{ Environment = 'prod'; ModuleVersion = '${{ env.ADF_TOOLS_VERSION }}' }
+          if ('${{ inputs.dry_run }}' -eq 'true') { $splat['WhatIf'] = $true }
+          ./scripts/Deploy-DataFactory.ps1 @splat
+
+      - name: Verify triggers were restarted
+        if: ${{ !inputs.dry_run }}
+        shell: pwsh
+        run: |
+          $rg  = terraform -chdir=infra/terraform output -raw resource_group_name
+          $adf = terraform -chdir=infra/terraform output -raw data_factory_name
+
+          $expected = Import-Csv src/adf/deployment/config-prod.csv |
+                      Where-Object { $_.type -eq 'trigger' -and $_.path -eq 'runtimeState' -and $_.value -eq 'Started' }
+
+          $actual = az datafactory trigger list `
+                      --resource-group $rg --factory-name $adf `
+                      --query "[].{name:name, state:properties.runtimeState}" -o json |
+                    ConvertFrom-Json
+
+          $problems = @()
+          foreach ($e in $expected) {
+            $a = $actual | Where-Object name -eq $e.name
+            if (-not $a)                   { $problems += "$($e.name) is missing from the factory" }
+            elseif ($a.state -ne 'Started') { $problems += "$($e.name) is '$($a.state)', expected 'Started'" }
+          }
+
+          if ($problems) {
+            Write-Host "::error::Triggers were not left in the expected state after deployment:"
+            $problems | ForEach-Object { Write-Host "::error::  $_" }
+            Write-Host "::error::PRODUCTION LOADS WILL NOT RUN. Start them manually in ADF Studio, then investigate."
+            exit 1
+          }
+
+          Write-Host 'All expected triggers are Started.'

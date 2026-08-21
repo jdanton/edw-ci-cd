@@ -1,0 +1,153 @@
+# =============================================================================
+# synapse-cd.yml
+# =============================================================================
+#
+# TWO DEPLOYMENTS, IN ORDER, EVERY TIME.
+#
+#   1. Workspace ARTEFACTS   src/synapse/workspace  -> azure.synapse.tools
+#                            Linked services, SQL script tabs, notebooks.
+#                            Deployed through the Dev REST API at
+#                            <workspace>.dev.azuresynapse.net.
+#
+#   2. Serverless SQL OBJECTS src/synapse/serverless -> Invoke-Sqlcmd over TDS
+#                            The edw_lake database, external data sources,
+#                            file formats, views, procedures, grants.
+#
+# Step 2 is not optional and is not covered by step 1. This is the single most
+# common misunderstanding about deploying Synapse: a "SQL script" artefact is a
+# saved query TAB in Studio. Deploying it does not execute it. If you only run
+# step 1, the workspace looks perfect in Studio and every ADF pipeline fails,
+# because edw_lake does not exist.
+#
+# BOTH steps require the private data plane, which is why this cannot run on a
+# GitHub-hosted runner:
+#   - the Dev API resolves through privatelink.dev.azuresynapse.net
+#   - the serverless endpoint resolves through privatelink.sql.azuresynapse.net
+# =============================================================================
+
+name: Synapse CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/synapse/**'
+      - 'scripts/Deploy-Synapse.ps1'
+      - 'scripts/Deploy-ServerlessSql.ps1'
+      - 'scripts/New-DeploymentConfig.ps1'
+      - '.github/workflows/synapse-cd.yml'
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        required: true
+        default: 'all'
+        type: choice
+        options: [all, dev, test, prod]
+      skip_artefacts:
+        description: 'Skip workspace artefacts, deploy serverless SQL only'
+        required: false
+        default: false
+        type: boolean
+      skip_serverless:
+        description: 'Skip serverless SQL, deploy workspace artefacts only'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: synapse-cd
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: '1.9.8'
+  SYNAPSE_TOOLS_VERSION: '1.6.0'
+
+jobs:
+
+  validate:
+    name: Validate
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate artefact JSON
+        shell: pwsh
+        run: |
+          $bad = 0
+          Get-ChildItem src/synapse/workspace -Filter *.json -Recurse | ForEach-Object {
+            try { $null = Get-Content $_.FullName -Raw | ConvertFrom-Json }
+            catch {
+              Write-Host "::error file=$($_.FullName)::$($_.Exception.Message)"
+              $bad++
+            }
+          }
+          if ($bad) { exit 1 }
+
+      # The numeric prefixes ARE the dependency graph, and a gap or a duplicate
+      # means something will run before its dependency exists. Cheap to check,
+      # extremely annoying to debug.
+      - name: Check serverless script ordering
+        shell: pwsh
+        run: |
+          $scripts = Get-ChildItem src/synapse/serverless -Filter *.sql -File | Sort-Object Name
+
+          $unprefixed = $scripts | Where-Object { $_.Name -notmatch '^\d{3}_' }
+          if ($unprefixed) {
+            Write-Host "::error::Every serverless script needs a NNN_ prefix - it is the execution order. Offenders: $($unprefixed.Name -join ', ')"
+            exit 1
+          }
+
+          $prefixes = $scripts | ForEach-Object { $_.Name.Substring(0, 3) }
+          $dupes = $prefixes | Group-Object | Where-Object Count -gt 1
+          if ($dupes) {
+            Write-Host "::error::Duplicate order prefixes: $($dupes.Name -join ', '). Execution order would be non-deterministic."
+            exit 1
+          }
+
+          Write-Host "Serverless deployment order:"
+          $scripts | ForEach-Object { Write-Host "  $($_.Name)" }
+
+  dev:
+    name: Deploy to dev
+    needs: [validate]
+    if: github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'dev'
+    uses: ./.github/workflows/_synapse-deploy.yml
+    with:
+      environment: dev
+      skip_artefacts: ${{ inputs.skip_artefacts == true }}
+      skip_serverless: ${{ inputs.skip_serverless == true }}
+    secrets: inherit
+
+  test:
+    name: Deploy to test
+    needs: [dev]
+    if: |
+      always() &&
+      (needs.dev.result == 'success' || needs.dev.result == 'skipped') &&
+      (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'test')
+    uses: ./.github/workflows/_synapse-deploy.yml
+    with:
+      environment: test
+      skip_artefacts: ${{ inputs.skip_artefacts == true }}
+      skip_serverless: ${{ inputs.skip_serverless == true }}
+    secrets: inherit
+
+  prod:
+    name: Deploy to prod
+    needs: [test]
+    if: |
+      always() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'prod')
+    uses: ./.github/workflows/_synapse-deploy.yml
+    with:
+      environment: prod
+      skip_artefacts: ${{ inputs.skip_artefacts == true }}
+      skip_serverless: ${{ inputs.skip_serverless == true }}
+    secrets: inherit

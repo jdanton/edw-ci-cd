@@ -1,0 +1,244 @@
+# =============================================================================
+# data-backfill.yml
+# =============================================================================
+#
+# Manually triggers an ADF pipeline run and waits for it, streaming progress.
+#
+# This is how you populate a brand-new environment, repair a failed month, or
+# reload a range after the TLC restates data. It is deliberately NOT automatic:
+# a workflow that loads data on push would re-run a twelve-month backfill every
+# time somebody fixed a typo in a comment.
+#
+# It also handles the first-run bootstrap: reference data (the 265 taxi zones)
+# must exist in dim.TaxiZone before any trip loads, or every fact row resolves
+# its zone keys to Unknown.
+# =============================================================================
+
+name: Data backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, test, prod]
+
+      start_year_month:
+        description: 'First month to load, YYYYMM (e.g. 202401)'
+        required: true
+        default: '202401'
+        type: string
+
+      end_year_month:
+        description: 'Last month to load, inclusive, YYYYMM'
+        required: true
+        default: '202401'
+        type: string
+
+      initialize_reference_data:
+        description: 'Load the taxi zone lookup first (required on a new environment)'
+        required: false
+        default: true
+        type: boolean
+
+      wait_for_completion:
+        description: 'Block until the pipeline finishes'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  # One backfill per environment. Two concurrent runs would both truncate
+  # stg.YellowTaxiTrip and interleave, producing a partition missing rows from
+  # both. PL_Load_Sql_YellowTrip pins pipeline concurrency to 1 as well; this is
+  # the outer belt to that inner braces.
+  group: data-backfill-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    name: Backfill ${{ inputs.start_year_month }} to ${{ inputs.end_year_month }} (${{ inputs.environment }})
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 720          # a multi-year backfill genuinely takes hours
+    environment: ${{ inputs.environment }}
+
+    env:
+      ARM_USE_OIDC: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Validate the requested range
+        shell: pwsh
+        run: |
+          $start = '${{ inputs.start_year_month }}'
+          $end   = '${{ inputs.end_year_month }}'
+
+          foreach ($v in @($start, $end)) {
+            if ($v -notmatch '^\d{6}$') { throw "'$v' is not YYYYMM." }
+            $month = [int]$v.Substring(4, 2)
+            if ($month -lt 1 -or $month -gt 12) { throw "'$v' has month $month; expected 1-12." }
+            $year = [int]$v.Substring(0, 4)
+            if ($year -lt 2009) { throw "'$v': the TLC trip record series begins in 2009." }
+          }
+
+          # YYYYMM is not linear - 202412 to 202501 differs by 89, not 1 - so
+          # count in absolute month ordinals.
+          function Get-Ordinal([string]$ym) {
+            ([int]$ym.Substring(0,4)) * 12 + [int]$ym.Substring(4,2)
+          }
+          $months = (Get-Ordinal $end) - (Get-Ordinal $start) + 1
+
+          if ($months -lt 1)   { throw "End month is before start month." }
+          if ($months -gt 120) { throw "$months months requested; the pipeline caps at 120. Split it into several runs." }
+
+          Write-Host "$months month(s) will be loaded, sequentially."
+          "MONTH_COUNT=$months" >> $env:GITHUB_ENV
+
+      - name: terraform init (read outputs)
+        working-directory: infra/terraform
+        run: |
+          terraform init -reconfigure -no-color \
+            -backend-config=envs/${{ inputs.environment }}/backend.hcl
+
+      - name: Verify connectivity
+        shell: pwsh
+        run: ./scripts/Test-PlatformConnectivity.ps1 -Environment ${{ inputs.environment }}
+
+      # ---------------------------------------------------------------------
+      # Reference data first. Without dim.TaxiZone populated, every fact row
+      # resolves PickupZoneKey and DropoffZoneKey to -1 and the
+      # UnknownPickupZoneRateWithinTolerance quality rule fires for the entire
+      # backfill.
+      # ---------------------------------------------------------------------
+      - name: Initialise reference data
+        if: ${{ inputs.initialize_reference_data }}
+        shell: pwsh
+        run: ./scripts/Initialize-ReferenceData.ps1 -Environment ${{ inputs.environment }}
+
+      - name: Start the backfill pipeline
+        id: start
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $rg  = terraform -chdir=infra/terraform output -raw resource_group_name
+          $adf = terraform -chdir=infra/terraform output -raw data_factory_name
+
+          $parameters = @{
+            startYearMonth = [int]'${{ inputs.start_year_month }}'
+            endYearMonth   = [int]'${{ inputs.end_year_month }}'
+          } | ConvertTo-Json -Compress
+
+          Write-Host "Factory   : $adf"
+          Write-Host "Pipeline  : PL_Backfill_NycTaxi_Yellow"
+          Write-Host "Parameters: $parameters"
+
+          $runId = az datafactory pipeline create-run `
+                      --resource-group $rg `
+                      --factory-name   $adf `
+                      --name           'PL_Backfill_NycTaxi_Yellow' `
+                      --parameters     $parameters `
+                      --query          runId -o tsv
+
+          if (-not $runId) { throw 'Failed to start the pipeline.' }
+
+          Write-Host "Run ID: $runId"
+          "run_id=$runId" >> $env:GITHUB_OUTPUT
+          "resource_group=$rg" >> $env:GITHUB_OUTPUT
+          "factory=$adf" >> $env:GITHUB_OUTPUT
+
+      - name: Wait for completion
+        if: ${{ inputs.wait_for_completion }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $rg     = '${{ steps.start.outputs.resource_group }}'
+          $adf    = '${{ steps.start.outputs.factory }}'
+          $runId  = '${{ steps.start.outputs.run_id }}'
+
+          # Budget generously: roughly 20 minutes per month, plus slack for the
+          # managed-VNet cold start on the first activity.
+          $budgetMinutes = ([int]$env:MONTH_COUNT * 25) + 30
+          $deadline      = (Get-Date).AddMinutes($budgetMinutes)
+
+          Write-Host "Polling until $($deadline.ToString('u')) (budget ${budgetMinutes}m)."
+
+          $lastStatus = ''
+          while ((Get-Date) -lt $deadline) {
+            $run = az datafactory pipeline-run show `
+                      --resource-group $rg --factory-name $adf --run-id $runId `
+                      -o json | ConvertFrom-Json
+
+            if ($run.status -ne $lastStatus) {
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $($run.status)"
+              $lastStatus = $run.status
+            }
+
+            if ($run.status -in @('Succeeded', 'Failed', 'Cancelled')) {
+              Add-Content $env:GITHUB_STEP_SUMMARY @"
+          ## Backfill - ``${{ inputs.environment }}``
+
+          | | |
+          |---|---|
+          | Range | ${{ inputs.start_year_month }} to ${{ inputs.end_year_month }} |
+          | Months | $env:MONTH_COUNT |
+          | Status | **$($run.status)** |
+          | Duration | $([math]::Round($run.durationInMs / 60000.0, 1)) minutes |
+          | Run ID | ``$runId`` |
+          "@
+
+              if ($run.status -ne 'Succeeded') {
+                Write-Host "::error::Pipeline run $runId finished with status $($run.status): $($run.message)"
+
+                # Surface the failing activities - the pipeline-level message is
+                # usually just "Operation on target X failed".
+                $activities = az datafactory activity-run query-by-pipeline-run `
+                                --resource-group $rg --factory-name $adf --run-id $runId `
+                                --last-updated-after (Get-Date).AddDays(-1).ToString('o') `
+                                --last-updated-before (Get-Date).AddDays(1).ToString('o') `
+                                -o json | ConvertFrom-Json
+
+                $activities.value |
+                  Where-Object status -eq 'Failed' |
+                  ForEach-Object {
+                    Write-Host "::error::  $($_.pipelineName) / $($_.activityName): $($_.error.message)"
+                  }
+
+                exit 1
+              }
+
+              Write-Host "Backfill complete."
+              exit 0
+            }
+
+            Start-Sleep -Seconds 30
+          }
+
+          Write-Host "::error::Timed out after ${budgetMinutes} minutes. The pipeline may still be running - check ADF Studio, run $runId."
+          exit 1
+
+      - name: Started (not waiting)
+        if: ${{ !inputs.wait_for_completion }}
+        run: |
+          echo "::notice::Pipeline run ${{ steps.start.outputs.run_id }} started. Monitor it in ADF Studio."

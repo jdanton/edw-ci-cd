@@ -1,0 +1,118 @@
+# =============================================================================
+# infra-cd.yml
+# =============================================================================
+#
+# The infrastructure promotion path: dev -> test -> prod, strictly in order.
+#
+# Each environment is a separate job with `needs:` on the previous one, so a
+# failure in dev stops the whole chain. Approval gates live on the GitHub
+# Environments (Settings -> Environments), not in this file: putting them here
+# would mean a pull request could edit them.
+#
+# WHAT THIS DOES NOT DO
+# ---------------------
+# It does not deploy ADF artefacts, Synapse artefacts, or the database schema.
+# Those have their own workflows, triggered by their own paths. A change to a
+# pipeline JSON must not re-plan the whole platform, and a change to a VNet CIDR
+# must not republish a factory.
+#
+# The one ordering constraint between them: infrastructure must exist before
+# artefacts can deploy into it. On a first-ever deployment, run this workflow to
+# completion before the others. After that they are independent.
+# =============================================================================
+
+name: Infrastructure CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/terraform/**'
+      - 'scripts/Approve-PrivateEndpointConnections.ps1'
+      - '.github/workflows/infra-cd.yml'
+      - '.github/workflows/_terraform-apply.yml'
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy a single environment (leave as "all" for the full promotion path)'
+        required: true
+        default: 'all'
+        type: choice
+        options: [all, dev, test, prod]
+      plan_only:
+        description: 'Plan without applying'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  # Serialise infrastructure changes. Two concurrent applies against the same
+  # state produce a lock error at best and a corrupted state at worst.
+  group: infra-cd
+  cancel-in-progress: false
+
+jobs:
+
+  dev:
+    if: |
+      github.event_name == 'push' ||
+      inputs.environment == 'all' ||
+      inputs.environment == 'dev'
+    uses: ./.github/workflows/_terraform-apply.yml
+    with:
+      environment: dev
+      apply: ${{ !inputs.plan_only }}
+    secrets: inherit
+
+  test:
+    # `always()` combined with an explicit result check means "run if dev
+    # succeeded OR dev was skipped because the operator asked for test only".
+    # Without always(), a skipped dev job would skip this one too.
+    needs: [dev]
+    if: |
+      always() &&
+      (needs.dev.result == 'success' || needs.dev.result == 'skipped') &&
+      (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'test')
+    uses: ./.github/workflows/_terraform-apply.yml
+    with:
+      environment: test
+      apply: ${{ !inputs.plan_only }}
+    secrets: inherit
+
+  prod:
+    needs: [test]
+    if: |
+      always() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'prod')
+    uses: ./.github/workflows/_terraform-apply.yml
+    with:
+      environment: prod
+      apply: ${{ !inputs.plan_only }}
+    secrets: inherit
+
+  summary:
+    name: Summary
+    needs: [dev, test, prod]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report
+        run: |
+          {
+            echo "## Infrastructure deployment"
+            echo ""
+            echo "| Environment | Result |"
+            echo "|---|---|"
+            echo "| dev  | ${{ needs.dev.result }} |"
+            echo "| test | ${{ needs.test.result }} |"
+            echo "| prod | ${{ needs.prod.result }} |"
+            echo ""
+            echo "Artefact deployments (ADF, Synapse, database schema) run in their"
+            echo "own workflows and are not affected by this run."
+          } >> "$GITHUB_STEP_SUMMARY"

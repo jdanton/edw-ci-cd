@@ -1,0 +1,169 @@
+# =============================================================================
+# _synapse-deploy.yml   (reusable)
+# =============================================================================
+# Deploys both halves of Synapse to ONE environment: workspace artefacts, then
+# the serverless SQL objects. Called three times by synapse-cd.yml.
+# =============================================================================
+
+name: Synapse deploy (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      skip_artefacts:
+        required: false
+        type: boolean
+        default: false
+      skip_serverless:
+        required: false
+        type: boolean
+        default: false
+      runner_labels:
+        required: false
+        type: string
+        default: '["self-hosted","linux","X64","edw"]'
+      terraform_version:
+        required: false
+        type: string
+        default: '1.9.8'
+      synapse_tools_version:
+        required: false
+        type: string
+        default: '1.6.0'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: ${{ inputs.environment }}
+    runs-on: ${{ fromJSON(inputs.runner_labels) }}
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+
+    env:
+      ARM_USE_OIDC: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: terraform init (read outputs)
+        working-directory: infra/terraform
+        run: |
+          terraform init -reconfigure -no-color \
+            -backend-config=envs/${{ inputs.environment }}/backend.hcl
+
+      # ---------------------------------------------------------------------
+      # Fail fast and legibly. Both deployment steps below reach private
+      # endpoints; if DNS is wrong they hang for minutes and then produce an
+      # error that blames SQL or the REST API rather than name resolution.
+      # ---------------------------------------------------------------------
+      - name: Verify private data plane is reachable
+        shell: pwsh
+        run: ./scripts/Test-PlatformConnectivity.ps1 -Environment ${{ inputs.environment }}
+
+      # ---------------------------------------------------------------------
+      # 1. Workspace artefacts
+      # ---------------------------------------------------------------------
+      - name: Deploy workspace artefacts
+        if: ${{ !inputs.skip_artefacts }}
+        shell: pwsh
+        run: |
+          ./scripts/Deploy-Synapse.ps1 `
+            -Environment '${{ inputs.environment }}' `
+            -ModuleVersion '${{ inputs.synapse_tools_version }}'
+
+      # ---------------------------------------------------------------------
+      # 2. Serverless SQL objects
+      #
+      # Runs even if the artefact step was skipped, because the two are
+      # genuinely independent - and the serverless objects are the half that
+      # pipelines actually depend on.
+      # ---------------------------------------------------------------------
+      - name: Deploy serverless SQL objects
+        if: ${{ !inputs.skip_serverless }}
+        shell: pwsh
+        run: ./scripts/Deploy-ServerlessSql.ps1 -Environment '${{ inputs.environment }}'
+
+      # ---------------------------------------------------------------------
+      # 3. Smoke test
+      #
+      # Proves the whole chain works end to end: the deployment identity can
+      # authenticate, the views resolve, the external data source points at a
+      # real container, and the workspace managed identity can actually read
+      # the lake. Any one of those broken produces a green deployment and a red
+      # pipeline six hours later.
+      # ---------------------------------------------------------------------
+      - name: Smoke test the logical data warehouse
+        if: ${{ !inputs.skip_serverless }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module SqlServer -Force
+
+          $ctx = terraform -chdir=infra/terraform output -json serverless_deployment_context | ConvertFrom-Json
+          $token = (az account get-access-token --resource 'https://database.windows.net/' -o json | ConvertFrom-Json).accessToken
+
+          # Metadata only - no file is opened, so this costs nothing even on a
+          # lake with years of history.
+          $query = @'
+          SELECT
+              ExternalDataSources = (SELECT COUNT(*) FROM sys.external_data_sources),
+              FileFormats         = (SELECT COUNT(*) FROM sys.external_file_formats),
+              Views               = (SELECT COUNT(*) FROM sys.views),
+              Procedures          = (SELECT COUNT(*) FROM sys.procedures);
+          '@
+
+          $r = Invoke-Sqlcmd -ServerInstance $ctx.serverlessEndpoint `
+                             -Database $ctx.databaseName `
+                             -AccessToken $token -Query $query -QueryTimeout 120
+
+          Write-Host "External data sources: $($r.ExternalDataSources)"
+          Write-Host "File formats         : $($r.FileFormats)"
+          Write-Host "Views                : $($r.Views)"
+          Write-Host "Procedures           : $($r.Procedures)"
+
+          if ($r.ExternalDataSources -lt 3) { throw "Expected 3 external data sources, found $($r.ExternalDataSources)." }
+          if ($r.Views -lt 5)               { throw "Expected at least 5 views, found $($r.Views)." }
+          if ($r.Procedures -lt 1)          { throw "Expected at least 1 procedure, found $($r.Procedures)." }
+
+          # Now prove storage access actually works. This is the check that
+          # catches a missing Storage Blob Data Contributor grant - which SQL
+          # reports as "content of directory cannot be listed", an error that
+          # reads like a path bug and is not.
+          try {
+            $probe = Invoke-Sqlcmd -ServerInstance $ctx.serverlessEndpoint `
+                                   -Database $ctx.databaseName `
+                                   -AccessToken $token -QueryTimeout 300 `
+                                   -Query 'SELECT TOP (1) PickupYear FROM raw.vw_YellowTaxiTrip;'
+
+            if ($probe) {
+              Write-Host "Storage access confirmed - raw layer is readable."
+            } else {
+              Write-Host "::notice::Views resolve and storage is reachable, but the raw layer is empty. Run the data-backfill workflow to load a month."
+            }
+          }
+          catch {
+            if ($_.Exception.Message -match 'cannot be listed|not accessible|Access Denied') {
+              Write-Host "::error::The Synapse workspace managed identity cannot read the lake. Grant it Storage Blob Data Contributor - see infra/terraform/rbac.tf, synapse_lake_contributor."
+              throw
+            }
+            # An empty lake is expected on a brand-new environment.
+            Write-Host "::notice::Raw layer not yet populated ($($_.Exception.Message))."
+          }

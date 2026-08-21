@@ -1,0 +1,139 @@
+# =============================================================================
+# sql-cd.yml
+# =============================================================================
+#
+# Builds the SDK-style database project ONCE and publishes that single DACPAC
+# to dev, then test, then prod.
+#
+# BUILD ONCE, DEPLOY MANY. The DACPAC is built in the first job and passed to
+# the others as an artefact. Rebuilding per environment would mean the thing
+# approved for production is not the thing that was tested - a subtle and
+# entirely avoidable class of release bug.
+#
+# Environment differences are supplied at PUBLISH time:
+#   - the publish profile   (Properties/EdwTaxi.Database.<env>.publish.xml)
+#   - SQLCMD variables      (/v:DataFactoryName=..., from Terraform outputs)
+#
+# THE PROD GATE
+# -------------
+# Before prod is touched, the workflow runs /Action:DeployReport and
+# /Action:Script and publishes both as artefacts. The GitHub Environment
+# approval then blocks until a human has read the exact T-SQL that will run.
+# Nobody should approve a production schema change they have not read.
+#
+# NETWORK: sqlpackage speaks TDS to a private endpoint. It cannot run on a
+# GitHub-hosted runner. Note that Azure SQL negotiates Redirect mode for
+# connections originating inside Azure, so ports 11000-11999 must be open in
+# addition to 1433 - the NSG in infra/terraform/modules/network does that.
+# =============================================================================
+
+name: Azure SQL CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/sql/**'
+      - '.github/workflows/sql-cd.yml'
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        required: true
+        default: 'all'
+        type: choice
+        options: [all, dev, test, prod]
+      script_only:
+        description: 'Generate the deployment script without applying it'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: sql-cd
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: '1.9.8'
+  DOTNET_VERSION: '8.0.x'
+
+jobs:
+
+  build:
+    name: Build DACPAC
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # TreatTSqlWarningsAsErrors is set in the .sqlproj, so an unresolved
+      # reference - a procedure naming a column that does not exist - fails
+      # here instead of at 03:00 in production.
+      - name: dotnet build
+        run: |
+          set -euo pipefail
+          dotnet build src/sql/EdwTaxi.Database/EdwTaxi.Database.sqlproj \
+            -c Release --nologo
+
+      - name: Summarise the model
+        shell: pwsh
+        run: |
+          Add-Content $env:GITHUB_STEP_SUMMARY @"
+          ## Database build
+
+          Commit ``${{ github.sha }}`` produced one DACPAC, which every
+          environment below will deploy. Nothing is rebuilt per environment.
+          "@
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dacpac
+          path: |
+            src/sql/EdwTaxi.Database/bin/Release/*.dacpac
+            src/sql/EdwTaxi.Database/Properties/*.publish.xml
+          retention-days: 90
+
+  dev:
+    name: Publish to dev
+    needs: [build]
+    if: github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'dev'
+    uses: ./.github/workflows/_sql-publish.yml
+    with:
+      environment: dev
+      script_only: ${{ inputs.script_only == true }}
+    secrets: inherit
+
+  test:
+    name: Publish to test
+    needs: [dev]
+    if: |
+      always() &&
+      (needs.dev.result == 'success' || needs.dev.result == 'skipped') &&
+      (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'test')
+    uses: ./.github/workflows/_sql-publish.yml
+    with:
+      environment: test
+      script_only: ${{ inputs.script_only == true }}
+    secrets: inherit
+
+  prod:
+    name: Publish to prod
+    needs: [test]
+    if: |
+      always() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'prod')
+    uses: ./.github/workflows/_sql-publish.yml
+    with:
+      environment: prod
+      script_only: ${{ inputs.script_only == true }}
+    secrets: inherit

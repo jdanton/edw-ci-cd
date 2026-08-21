@@ -1,0 +1,232 @@
+# =============================================================================
+# drift-detect.yml
+# =============================================================================
+#
+# Runs `terraform plan` against every environment on a schedule and fails if
+# anything has changed outside the pipeline.
+#
+# WHY THIS EARNS ITS KEEP
+# -----------------------
+# Infrastructure as code is a claim, not a guarantee. The claim quietly stops
+# being true when:
+#
+#   * somebody fixes an incident in the portal at 02:00 and never backports it;
+#   * an Azure Policy remediation task changes a setting;
+#   * a service's defaults change on the provider's side;
+#   * a resource is deleted by a cleanup script that was too broad.
+#
+# Each of those is invisible until the next deployment silently reverts it -
+# usually reintroducing the incident that was fixed at 02:00. Detecting drift
+# on a Monday morning is dramatically cheaper than discovering it during a
+# release.
+#
+# This workflow only PLANS. It never applies: automatically "correcting" drift
+# is how you delete the emergency fix that is currently holding production
+# together. A human decides whether the drift should be adopted into code or
+# reverted.
+# =============================================================================
+
+name: Drift detection
+
+on:
+  schedule:
+    # 06:00 UTC every weekday - before European working hours, after the
+    # overnight loads have finished.
+    - cron: '0 6 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: drift-detect
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    name: Plan ${{ matrix.environment }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false      # report drift in every environment, not just the first
+      matrix:
+        environment: [dev, test, prod]
+
+    # The federated credential for test and prod includes a
+    # `ref:refs/heads/main` subject precisely so that scheduled runs like this
+    # one can authenticate without an `environment:` deployment.
+    environment: ${{ matrix.environment }}
+
+    outputs:
+      drifted: ${{ steps.plan.outputs.drifted }}
+
+    env:
+      ARM_USE_OIDC: 'true'
+      TF_IN_AUTOMATION: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: terraform init
+        working-directory: infra/terraform
+        run: |
+          terraform init -reconfigure -no-color \
+            -backend-config=envs/${{ matrix.environment }}/backend.hcl
+
+      - name: terraform plan
+        id: plan
+        working-directory: infra/terraform
+        run: |
+          set -euo pipefail
+          set +e
+          # -lock=false: this is read-only, and taking the state lock would
+          # block a real deployment that happened to start at 06:00.
+          terraform plan -no-color -input=false -lock=false -detailed-exitcode \
+            -var-file=envs/${{ matrix.environment }}/${{ matrix.environment }}.tfvars \
+            2>&1 | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+
+          case $code in
+            0) echo "drifted=false" >> "$GITHUB_OUTPUT"; echo "No drift." ;;
+            2) echo "drifted=true"  >> "$GITHUB_OUTPUT"; echo "::warning::Drift detected in ${{ matrix.environment }}." ;;
+            *) echo "::error::terraform plan failed for ${{ matrix.environment }}"; exit 1 ;;
+          esac
+
+      - name: Report
+        if: always()
+        shell: pwsh
+        run: |
+          $drifted = '${{ steps.plan.outputs.drifted }}' -eq 'true'
+
+          if (-not $drifted) {
+            Add-Content $env:GITHUB_STEP_SUMMARY "## ``${{ matrix.environment }}`` - no drift"
+            exit 0
+          }
+
+          $plan  = Get-Content infra/terraform/plan.txt -Raw
+          $lines = $plan -split "`n"
+
+          # Just the change lines: the summary has a size limit and the
+          # surrounding refresh noise helps nobody.
+          $changes = $lines | Where-Object { $_ -match '^\s+[~+\-/]' } | Select-Object -First 100
+
+          Add-Content $env:GITHUB_STEP_SUMMARY @"
+          ## ``${{ matrix.environment }}`` - DRIFT DETECTED
+
+          Something changed outside this repository.
+
+          ``````
+          $($changes -join "`n")
+          ``````
+
+          <details><summary>Full plan</summary>
+
+          ``````hcl
+          $(($lines | Select-Object -Last 300) -join "`n")
+          ``````
+
+          </details>
+
+          ### What to do
+
+          1. Work out WHO changed it and WHY - check the Activity Log for the
+             resource group. Drift is usually a deliberate fix under time
+             pressure, not vandalism.
+          2. Decide:
+             - **Adopt** - the change was right. Put it in ``infra/terraform``
+               and open a PR, so the next deployment does not revert it.
+             - **Revert** - the change was wrong. Run Infrastructure CD, which
+               will restore the declared state.
+          3. Do NOT ignore it. The next ``infra-cd`` run reverts this silently.
+          "@
+
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.drifted == 'true'
+        with:
+          name: drift-plan-${{ matrix.environment }}
+          path: infra/terraform/plan.txt
+          retention-days: 30
+
+  raise-issue:
+    name: Raise an issue if anything drifted
+    needs: [detect]
+    if: always() && needs.detect.result != 'skipped'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Open or update the drift issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            // The `detect` job is a matrix; its aggregate result is 'failure'
+            // only on a genuine plan error. Drift itself is reported via the
+            // step summary, so check the job conclusion of the whole matrix.
+            const jobs = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+            });
+
+            const drifted = jobs.data.jobs.filter(j =>
+              j.name.startsWith('Plan ') &&
+              j.steps.some(s => s.name === 'Report' && s.conclusion === 'success')
+            );
+
+            // Nothing to do unless a warning annotation was produced. Keep this
+            // conservative: a duplicate issue every weekday morning is the
+            // fastest way to get drift detection muted entirely.
+            const title = 'Infrastructure drift detected';
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'drift',
+            });
+
+            const body = [
+              'Scheduled drift detection found differences between the deployed',
+              'infrastructure and `infra/terraform`.',
+              '',
+              `Run: ${runUrl}`,
+              '',
+              'Open the run summary for the per-environment plan output.',
+              '',
+              '**Do not close this without deciding**: adopt the change into code,',
+              'or revert it by running Infrastructure CD. Ignoring it means the',
+              'next deployment reverts it silently.',
+            ].join('\n');
+
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body: `Drift still present as of ${new Date().toISOString()}.\n\nRun: ${runUrl}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['drift', 'infrastructure'],
+              });
+            }

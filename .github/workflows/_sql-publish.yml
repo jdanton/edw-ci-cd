@@ -1,0 +1,306 @@
+# =============================================================================
+# _sql-publish.yml   (reusable)
+# =============================================================================
+# Publishes the pre-built DACPAC to ONE environment with sqlpackage.
+#
+# Order within the job matters and is deliberate:
+#
+#   1. DeployReport  - machine-readable XML of what WOULD change, including any
+#                      operation flagged as causing data loss.
+#   2. Script        - the exact T-SQL that would run.
+#   3. (approval)    - the GitHub Environment gate sits between the run being
+#                      queued and this job starting, so both artefacts from the
+#                      PREVIOUS environment are available to the reviewer.
+#   4. Publish       - apply.
+#   5. Verify        - prove the objects exist and the ADF user is present.
+#
+# Steps 1 and 2 cost about ten seconds and have prevented more production
+# incidents than any other part of this template.
+# =============================================================================
+
+name: SQL publish (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      script_only:
+        required: false
+        type: boolean
+        default: false
+      runner_labels:
+        required: false
+        type: string
+        default: '["self-hosted","linux","X64","edw"]'
+      terraform_version:
+        required: false
+        type: string
+        default: '1.9.8'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    name: ${{ inputs.environment }}
+    runs-on: ${{ fromJSON(inputs.runner_labels) }}
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+
+    env:
+      ARM_USE_OIDC: 'true'
+      DACPAC: dacpac/EdwTaxi.Database.dacpac
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dacpac
+          path: dacpac
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install sqlpackage
+        run: |
+          set -euo pipefail
+          if command -v sqlpackage >/dev/null 2>&1; then
+            echo "sqlpackage already installed: $(sqlpackage /version 2>&1 | head -1)"
+            exit 0
+          fi
+          # Available as a dotnet global tool, which works identically on Linux,
+          # macOS and Windows runners.
+          dotnet tool install --global microsoft.sqlpackage
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: terraform init (read outputs)
+        working-directory: infra/terraform
+        run: |
+          terraform init -reconfigure -no-color \
+            -backend-config=envs/${{ inputs.environment }}/backend.hcl
+
+      - name: Resolve target
+        id: target
+        working-directory: infra/terraform
+        run: |
+          set -euo pipefail
+          {
+            echo "server=$(terraform output -raw sql_server_fqdn)"
+            echo "database=$(terraform output -raw sql_database_name)"
+            echo "adf_name=$(terraform output -raw data_factory_name)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify the server is reachable
+        shell: pwsh
+        run: |
+          ./scripts/Test-PlatformConnectivity.ps1 -SkipTerraform `
+            -SqlServerFqdn '${{ steps.target.outputs.server }}'
+
+      # -----------------------------------------------------------------------
+      # The token. sqlpackage's /AccessToken accepts a raw JWT. The deployment
+      # service principal is a member of the Entra admin group for this server
+      # (bootstrap/main.tf), so this token carries full control of the database
+      # with no password anywhere in the system.
+      # -----------------------------------------------------------------------
+      - name: Acquire SQL access token
+        id: token
+        run: |
+          set -euo pipefail
+          token=$(az account get-access-token --resource https://database.windows.net/ --query accessToken -o tsv)
+          echo "::add-mask::$token"
+          echo "value=$token" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # 1. What would change?
+      # -----------------------------------------------------------------------
+      - name: DeployReport
+        run: |
+          set -euo pipefail
+          sqlpackage /Action:DeployReport \
+            /SourceFile:"$DACPAC" \
+            /Profile:"dacpac/EdwTaxi.Database.${{ inputs.environment }}.publish.xml" \
+            /TargetServerName:"${{ steps.target.outputs.server }}" \
+            /TargetDatabaseName:"${{ steps.target.outputs.database }}" \
+            /AccessToken:"${{ steps.token.outputs.value }}" \
+            /OutputPath:"deployreport-${{ inputs.environment }}.xml" \
+            /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
+            /v:EnvironmentName="${{ inputs.environment }}" \
+            /v:DimDateStartYear=2009 \
+            /v:DimDateEndYear=2035
+
+      - name: Summarise changes
+        shell: pwsh
+        run: |
+          [xml]$report = Get-Content "deployreport-${{ inputs.environment }}.xml"
+
+          $operations = @($report.DeploymentReport.Operations.Operation)
+          $alerts     = @($report.DeploymentReport.Alerts.Alert)
+
+          if ($operations.Count -eq 0) {
+            Add-Content $env:GITHUB_STEP_SUMMARY "## Database - ``${{ inputs.environment }}``\n\nNo schema changes."
+          }
+          else {
+            $rows = $operations | ForEach-Object {
+              $items = @($_.Item) | ForEach-Object { "``$($_.Value)``" }
+              "| $($_.Name) | $($items -join '<br>') |"
+            }
+
+            Add-Content $env:GITHUB_STEP_SUMMARY @"
+          ## Database - ``${{ inputs.environment }}``
+
+          | Operation | Objects |
+          |---|---|
+          $($rows -join "`n")
+          "@
+          }
+
+          # Data-loss alerts are the reason this step exists. With
+          # BlockOnPossibleDataLoss=True (test and prod) the publish will refuse
+          # to run - surface WHY here rather than making someone read raw XML.
+          if ($alerts.Count -gt 0) {
+            $alertRows = $alerts | ForEach-Object {
+              $issues = @($_.Issue) | ForEach-Object { $_.Value }
+              "- **$($_.Name)**: $($issues -join ', ')"
+            }
+
+            Add-Content $env:GITHUB_STEP_SUMMARY @"
+
+          ### Alerts
+
+          $($alertRows -join "`n")
+
+          > A ``DataIssue`` alert means this deployment would lose data. In test
+          > and prod ``BlockOnPossibleDataLoss`` is True, so it will be REFUSED.
+          > The fix is a migration, not a flag: add the new column, backfill it
+          > in a post-deploy script, deploy, then drop the old column in a later
+          > deployment. See docs/10-making-a-change.md.
+          "@
+          }
+
+      # -----------------------------------------------------------------------
+      # 2. The exact T-SQL
+      # -----------------------------------------------------------------------
+      - name: Generate deployment script
+        run: |
+          set -euo pipefail
+          sqlpackage /Action:Script \
+            /SourceFile:"$DACPAC" \
+            /Profile:"dacpac/EdwTaxi.Database.${{ inputs.environment }}.publish.xml" \
+            /TargetServerName:"${{ steps.target.outputs.server }}" \
+            /TargetDatabaseName:"${{ steps.target.outputs.database }}" \
+            /AccessToken:"${{ steps.token.outputs.value }}" \
+            /OutputPath:"deployscript-${{ inputs.environment }}.sql" \
+            /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
+            /v:EnvironmentName="${{ inputs.environment }}" \
+            /v:DimDateStartYear=2009 \
+            /v:DimDateEndYear=2035
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployment-plan-${{ inputs.environment }}
+          path: |
+            deployreport-${{ inputs.environment }}.xml
+            deployscript-${{ inputs.environment }}.sql
+          retention-days: 90
+
+      # -----------------------------------------------------------------------
+      # 3. Apply
+      # -----------------------------------------------------------------------
+      - name: Publish
+        if: ${{ !inputs.script_only }}
+        run: |
+          set -euo pipefail
+          sqlpackage /Action:Publish \
+            /SourceFile:"$DACPAC" \
+            /Profile:"dacpac/EdwTaxi.Database.${{ inputs.environment }}.publish.xml" \
+            /TargetServerName:"${{ steps.target.outputs.server }}" \
+            /TargetDatabaseName:"${{ steps.target.outputs.database }}" \
+            /AccessToken:"${{ steps.token.outputs.value }}" \
+            /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
+            /v:EnvironmentName="${{ inputs.environment }}" \
+            /v:DimDateStartYear=2009 \
+            /v:DimDateEndYear=2035 \
+            /Diagnostics:True
+
+      - name: Script only - not applied
+        if: ${{ inputs.script_only }}
+        run: |
+          echo "::notice::script_only was requested. The deployment script is in the deployment-plan-${{ inputs.environment }} artefact; nothing was applied."
+
+      # -----------------------------------------------------------------------
+      # 4. Verify
+      # -----------------------------------------------------------------------
+      - name: Verify deployment
+        if: ${{ !inputs.script_only }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable SqlServer)) {
+            Install-Module SqlServer -Scope CurrentUser -Force -AllowClobber -MinimumVersion 22.0.0
+          }
+          Import-Module SqlServer -Force
+
+          $token = '${{ steps.token.outputs.value }}'
+          $server = '${{ steps.target.outputs.server }}'
+          $db     = '${{ steps.target.outputs.database }}'
+          $adf    = '${{ steps.target.outputs.adf_name }}'
+
+          $query = @"
+          SELECT
+              Tables      = (SELECT COUNT(*) FROM sys.tables),
+              Views       = (SELECT COUNT(*) FROM sys.views),
+              Procedures  = (SELECT COUNT(*) FROM sys.procedures),
+              DimDateRows = (SELECT COUNT(*) FROM dim.Date),
+              DqRules     = (SELECT COUNT(*) FROM meta.DataQualityRule),
+              AdfUser     = (SELECT COUNT(*) FROM sys.database_principals WHERE name = '$adf');
+          "@
+
+          $r = Invoke-Sqlcmd -ServerInstance $server -Database $db -AccessToken $token -Query $query -QueryTimeout 300
+
+          Write-Host "Tables      : $($r.Tables)"
+          Write-Host "Views       : $($r.Views)"
+          Write-Host "Procedures  : $($r.Procedures)"
+          Write-Host "dim.Date    : $($r.DimDateRows) rows"
+          Write-Host "DQ rules    : $($r.DqRules)"
+          Write-Host "ADF user    : $($r.AdfUser)"
+
+          if ($r.DimDateRows -lt 1000) {
+            throw "dim.Date has only $($r.DimDateRows) rows. The post-deploy date generator did not run correctly."
+          }
+          if ($r.DqRules -lt 1) {
+            throw "meta.DataQualityRule is empty. Post-deploy script 030 did not run."
+          }
+
+          if ($r.AdfUser -eq 0) {
+            # A warning, not a failure: the schema deployed correctly, and the
+            # cause is almost always a Graph permission rather than anything in
+            # this DACPAC. But ADF pipelines WILL fail until it is fixed.
+            Write-Host "::error::The Data Factory managed identity '$adf' has no user in this database. ADF pipelines will fail with 'Login failed for user <token-identified principal>'. See docs/12-troubleshooting.md#adf-cannot-log-in-to-azure-sql"
+            exit 1
+          }
+
+          Add-Content $env:GITHUB_STEP_SUMMARY @"
+
+          ### Verification - ``${{ inputs.environment }}``
+
+          | Check | Value |
+          |---|---|
+          | Tables | $($r.Tables) |
+          | Views | $($r.Views) |
+          | Procedures | $($r.Procedures) |
+          | dim.Date rows | $($r.DimDateRows) |
+          | Data quality rules | $($r.DqRules) |
+          | ADF database user | present |
+          "@
