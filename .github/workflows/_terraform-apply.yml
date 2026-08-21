@@ -1,0 +1,218 @@
+# =============================================================================
+# _terraform-apply.yml   (reusable)
+# =============================================================================
+#
+# Plans and applies the infrastructure for ONE environment.
+#
+# Called by infra-cd.yml once per environment. Kept reusable so that the plan/
+# apply/verify logic exists exactly once - three copies of this drift apart,
+# and the copy that drifts is always the production one.
+#
+# The `environment:` input is what makes the OIDC federation work: the token
+# GitHub mints carries the subject `repo:<owner>/<repo>:environment:<env>`, and
+# Entra will only exchange it for the service principal whose federated
+# credential names that exact subject. A job that omits `environment:` cannot
+# authenticate at all, which is a much better failure than one that
+# authenticates as the wrong environment.
+# =============================================================================
+
+name: Terraform apply (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'dev, test or prod'
+        required: true
+        type: string
+      terraform_version:
+        required: false
+        type: string
+        default: '1.9.8'
+      apply:
+        description: 'Apply, or plan only'
+        required: false
+        type: boolean
+        default: true
+      runner_labels:
+        required: false
+        type: string
+        default: '["self-hosted","linux","X64","edw"]'
+    outputs:
+      resource_group_name:
+        value: ${{ jobs.terraform.outputs.resource_group_name }}
+      data_factory_name:
+        value: ${{ jobs.terraform.outputs.data_factory_name }}
+      synapse_workspace_name:
+        value: ${{ jobs.terraform.outputs.synapse_workspace_name }}
+      sql_server_fqdn:
+        value: ${{ jobs.terraform.outputs.sql_server_fqdn }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform:
+    name: ${{ inputs.environment }}
+    runs-on: ${{ fromJSON(inputs.runner_labels) }}
+    timeout-minutes: 90
+
+    # Protection rules on this GitHub Environment - required reviewers, wait
+    # timers, branch restrictions - are enforced BEFORE the job starts and
+    # before any token is issued.
+    environment: ${{ inputs.environment }}
+
+    outputs:
+      resource_group_name:    ${{ steps.outputs.outputs.resource_group_name }}
+      data_factory_name:      ${{ steps.outputs.outputs.data_factory_name }}
+      synapse_workspace_name: ${{ steps.outputs.outputs.synapse_workspace_name }}
+      sql_server_fqdn:        ${{ steps.outputs.outputs.sql_server_fqdn }}
+
+    env:
+      ARM_USE_OIDC: 'true'
+      # Silences the "Terraform has no state" nag and keeps logs readable.
+      TF_IN_AUTOMATION: 'true'
+      TF_INPUT: '0'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          terraform_wrapper: false
+
+      # enable-AzPSSession is required because modules/synapse and
+      # modules/datafactory invoke a PowerShell provisioner that shells out to
+      # `az`. Without it the CLI is unauthenticated inside the provisioner and
+      # the private endpoint approvals fail.
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: terraform init
+        working-directory: infra/terraform
+        run: |
+          terraform init -reconfigure -no-color \
+            -backend-config=envs/${{ inputs.environment }}/backend.hcl
+
+      - name: terraform plan
+        id: plan
+        working-directory: infra/terraform
+        run: |
+          set -euo pipefail
+          # -detailed-exitcode: 0 = no changes, 1 = error, 2 = changes present.
+          # Capturing it lets the apply step be skipped entirely when there is
+          # nothing to do, which keeps the run history honest.
+          set +e
+          terraform plan -no-color -input=false \
+            -var-file=envs/${{ inputs.environment }}/${{ inputs.environment }}.tfvars \
+            -detailed-exitcode \
+            -out=tfplan 2>&1 | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+
+          case $code in
+            0) echo "has_changes=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "has_changes=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::terraform plan failed"; exit 1 ;;
+          esac
+
+      - name: Publish plan
+        working-directory: infra/terraform
+        shell: pwsh
+        run: |
+          $plan  = Get-Content plan.txt -Raw
+          $lines = $plan -split "`n"
+          if ($lines.Count -gt 400) {
+            $plan = ($lines[0..200] -join "`n") +
+                    "`n`n... $($lines.Count - 400) lines omitted, see the artefact ...`n`n" +
+                    ($lines[-200..-1] -join "`n")
+          }
+
+          Add-Content $env:GITHUB_STEP_SUMMARY @"
+          ## Terraform plan - ${{ inputs.environment }}
+
+          Changes pending: **${{ steps.plan.outputs.has_changes }}**
+
+          <details><summary>Show plan</summary>
+
+          ``````hcl
+          $plan
+          ``````
+
+          </details>
+          "@
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment }}-${{ github.run_id }}
+          path: infra/terraform/plan.txt
+          retention-days: 30
+
+      - name: terraform apply
+        if: inputs.apply && steps.plan.outputs.has_changes == 'true'
+        working-directory: infra/terraform
+        run: |
+          set -euo pipefail
+          # Applies the SAVED PLAN, not a fresh one. Anything that changed
+          # between plan and apply invalidates the file and fails the step -
+          # which is exactly what you want after a human approved that plan.
+          terraform apply -no-color -input=false -auto-approve tfplan
+
+      - name: No changes
+        if: steps.plan.outputs.has_changes == 'false'
+        run: echo "Infrastructure already matches the configuration. Nothing applied."
+
+      - name: Capture outputs
+        id: outputs
+        if: inputs.apply
+        working-directory: infra/terraform
+        run: |
+          set -euo pipefail
+          {
+            echo "resource_group_name=$(terraform output -raw resource_group_name)"
+            echo "data_factory_name=$(terraform output -raw data_factory_name)"
+            echo "synapse_workspace_name=$(terraform output -raw synapse_workspace_name)"
+            echo "sql_server_fqdn=$(terraform output -raw sql_server_fqdn)"
+          } >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------------
+      # Post-apply connectivity assertion.
+      #
+      # A green apply does NOT mean the platform is usable. If the private DNS
+      # zones are not linked to the runner VNet, every later deployment stage
+      # will hang and time out - and the error will point at SQL or Synapse
+      # rather than at DNS. Failing here, loudly and with the actual cause,
+      # saves the afternoon.
+      # ---------------------------------------------------------------------
+      - name: Verify private data plane is reachable
+        if: inputs.apply
+        shell: pwsh
+        run: ./scripts/Test-PlatformConnectivity.ps1 -Environment ${{ inputs.environment }}
+
+      - name: Warn if DNS is not linked to the runner VNet
+        if: inputs.apply
+        working-directory: infra/terraform
+        shell: pwsh
+        run: |
+          $linked = terraform output -raw runner_vnet_dns_linked
+          $peered = terraform output -raw runner_peering_enabled
+
+          if ($linked -ne 'true' -or $peered -ne 'true') {
+            Add-Content $env:GITHUB_STEP_SUMMARY @"
+          > **Connectivity warning**
+          >
+          > - Runner VNet peered: ``$peered``
+          > - Private DNS linked to runner VNet: ``$linked``
+          >
+          > With either of these false, this runner may resolve PUBLIC endpoints
+          > for Synapse and Azure SQL. Deployments will hang rather than fail
+          > cleanly. See docs/05-runner-connectivity.md.
+          "@
+          }
