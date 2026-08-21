@@ -51,20 +51,20 @@ locals {
         description        = "Blob API fallback used by some Synapse internals."
       }
     },
-    var.key_vault_id == null ? {} : {
+    var.enable_key_vault_endpoint ? {
       "keyvault" = {
         target_resource_id = var.key_vault_id
         subresource_name   = "vault"
         description        = "Synapse linked services resolve secrets from Key Vault."
       }
-    },
-    var.sql_server_id == null ? {} : {
+    } : {},
+    var.enable_sql_endpoint ? {
       "azure-sql" = {
         target_resource_id = var.sql_server_id
         subresource_name   = "sqlServer"
         description        = "Optional: lets Synapse pipelines reach the serving database directly."
       }
-    },
+    } : {},
   )
 
   managed_private_endpoints = merge(local.default_managed_private_endpoints, var.additional_managed_private_endpoints)
@@ -84,7 +84,7 @@ locals {
     "dev" = {
       subresource = "Dev"
       zone        = "privatelink.dev.azuresynapse.net"
-      description = "Artefact/development REST API. azure.synapse.tools (Publish-SynapseFromJson) talks to this. Without it, artefact deployment cannot work at all."
+      description = "Artifact/development REST API. azure.synapse.tools (Publish-SynapseFromJson) talks to this. Without it, artifact deployment cannot work at all."
     }
   }
 }
@@ -111,7 +111,7 @@ resource "azurerm_synapse_workspace" "this" {
   location            = var.location
 
   # Every workspace demands a default ADLS Gen2 filesystem. It holds workspace
-  # metadata and Spark artefacts - NOT your data. Keep it separate from the
+  # metadata and Spark artifacts - NOT your data. Keep it separate from the
   # medallion filesystems so nobody confuses the two.
   storage_data_lake_gen2_filesystem_id = var.default_filesystem_id
 
@@ -154,12 +154,12 @@ resource "azurerm_synapse_workspace" "this" {
 #
 # Both point at the SAME Entra group, deliberately:
 #
-#   azurerm_synapse_workspace_aad_admin      -> Synapse RBAC (Studio, artefacts)
+#   azurerm_synapse_workspace_aad_admin      -> Synapse RBAC (Studio, artifacts)
 #   azurerm_synapse_workspace_sql_aad_admin  -> serverless SQL endpoint (sysadmin)
 #
 # The GitHub Actions deployment service principal is a member of that group
 # (bootstrap/main.tf puts it there), which is what lets a single OIDC token
-# both publish artefacts with azure.synapse.tools AND run the serverless DDL in
+# both publish artifacts with azure.synapse.tools AND run the serverless DDL in
 # src/synapse/serverless/ - with no password and no extra grant.
 # ---------------------------------------------------------------------------
 
@@ -307,7 +307,7 @@ resource "null_resource" "approve_managed_private_endpoints" {
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_diagnostic_setting" "this" {
-  count = var.log_analytics_workspace_id == null ? 0 : 1
+  count = var.enable_diagnostics ? 1 : 0
 
   name                       = "diag"
   target_resource_id         = azurerm_synapse_workspace.this.id

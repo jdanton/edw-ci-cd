@@ -122,7 +122,7 @@ variable "runner_vnet_id" {
     THIS IS EFFECTIVELY MANDATORY for this template. Every data-plane endpoint
     has public access disabled, so a GitHub-hosted runner cannot:
       * create the ADLS filesystems (Terraform, dfs data plane)
-      * publish Synapse artefacts (azure.synapse.tools -> dev.azuresynapse.net)
+      * publish Synapse artifacts (azure.synapse.tools -> dev.azuresynapse.net)
       * run the serverless DDL (-ondemand.sql.azuresynapse.net, TDS)
       * publish the DACPAC (sqlpackage -> database.windows.net, TDS)
 

@@ -278,7 +278,7 @@ in prod, read the plan for `# forces replacement`:
 terraform plan -var-file=envs/prod/prod.tfvars | grep -B5 'forces replacement'
 ```
 
-The `_terraform-apply.yml` workflow publishes the plan as an artefact and as a
+The `_terraform-apply.yml` workflow publishes the plan as an artifact and as a
 job summary, so the reviewer on the prod approval gate can do this without
 running anything.
 

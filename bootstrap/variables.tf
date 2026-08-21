@@ -49,6 +49,58 @@ variable "github_repository" {
   type        = string
 }
 
+# ---------------------------------------------------------------------------
+# IMMUTABLE SUBJECT CLAIMS
+#
+# GitHub is migrating OIDC subjects from name-based to ID-based:
+#
+#   legacy     repo:jdanton/edw-ci-cd:pull_request
+#   immutable  repo:jdanton@7385792/edw-ci-cd@1341714815:pull_request
+#
+# The numeric IDs are the owner ID and repository ID. This is a genuine security
+# improvement, not churn: names can be renamed, transferred, deleted and
+# re-registered by someone else, so a name-based federated credential can in
+# principle be inherited by a different repository. Numeric IDs cannot be.
+#
+# A mismatch fails at azure/login with:
+#
+#   AADSTS700213: No matching federated identity record found for presented
+#   assertion subject 'repo:jdanton@7385792/edw-ci-cd@1341714815:pull_request'
+#
+# Find your IDs with:
+#   gh api repos/<owner>/<repo> --jq '{owner_id: .owner.id, repo_id: .id}'
+#
+# Confirm which form YOUR repository issues with:
+#   gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+# and read `sub_claim_prefix`. Note that `use_immutable_subject: false` does
+# NOT reliably mean legacy subjects are issued - during the rollout the prefix
+# field is the accurate signal.
+# ---------------------------------------------------------------------------
+
+variable "use_immutable_subject_claim" {
+  description = "Build federated credential subjects with the ID-based (immutable) format. Set false only if `gh api repos/<owner>/<repo>/actions/oidc/customization/sub` shows a name-based sub_claim_prefix."
+  type        = bool
+  default     = true
+}
+
+variable "github_owner_id" {
+  description = "Numeric GitHub owner (user or org) ID. Required when use_immutable_subject_claim = true. gh api repos/<owner>/<repo> --jq .owner.id"
+  type        = number
+  default     = null
+}
+
+variable "github_repository_id" {
+  description = "Numeric GitHub repository ID. Required when use_immutable_subject_claim = true. gh api repos/<owner>/<repo> --jq .id"
+  type        = number
+  default     = null
+
+  # Cross-variable validation is not available in a variable block at the
+  # required_version floor of 1.5 - a condition may only reference its own
+  # variable. The "IDs are required when immutable" check is a precondition on
+  # azuread_application_federated_identity_credential.deploy_environment in
+  # main.tf instead.
+}
+
 variable "environments" {
   description = <<-EOT
     Map of environment name -> settings. The key becomes:
@@ -120,13 +172,22 @@ variable "state_storage_allowed_ips" {
     Public IPs / CIDRs permitted to reach the Terraform state account.
 
     Leave EMPTY to keep the account open to any network (default-action Allow).
-    That is the template default because GitHub-hosted runners have no stable
-    egress IP, and the state account is protected by Entra RBAC + OIDC anyway.
+    That is the template default, and it is defensible: the account has
+    shared_access_key_enabled = false, so the only way in is an Entra token held
+    by an OIDC-federated principal. There is no key to leak.
 
-    If you run *all* Terraform from the self-hosted runners created in
-    infra/terraform/modules/runner (which sit behind a static NAT Gateway IP),
-    set this to that IP and the account flips to default-action Deny. That is
-    the recommended production posture - see docs/05-self-hosted-runners.md.
+    Tighten it once your runners are proven. All Terraform in this template runs
+    on your VNet-attached self-hosted runners, so there is exactly one egress IP
+    to allow - typically the NAT gateway on the runner subnet:
+
+        az network nat gateway show -g <rg> -n <natgw> --query publicIpAddresses
+
+    or, from a job on the runner itself:
+
+        curl -s https://api.ipify.org
+
+    Setting this flips the account to default-action Deny. See
+    docs/05-runner-connectivity.md#outbound-internet.
   EOT
   type        = list(string)
   default     = []

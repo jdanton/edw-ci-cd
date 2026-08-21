@@ -10,11 +10,11 @@
         "",
         "Option semantics (see docs/06-data-factory.md for the long version):",
         "",
-        "  excludes          Artefacts NOT to publish. Wildcards allowed. Format is",
+        "  excludes          artifacts NOT to publish. Wildcards allowed. Format is",
         "                    '<type>.<name>' or just '<type>.*'.",
         "  includes          If non-empty, ONLY these are published. Use for a targeted",
         "                    hotfix deployment; leave empty for normal runs.",
-        "  deleteNotInSource Remove artefacts present in the factory but absent from the",
+        "  deleteNotInSource Remove artifacts present in the factory but absent from the",
         "                    repository. This is what makes the factory converge on the",
         "                    repo rather than accumulating orphans forever.",
         "  stopStartTriggers Stop every trigger before publishing and restart the ones",
@@ -41,7 +41,7 @@
     },
     "environments": {
         "dev": {
-            "$comment": "Dev is the Git-connected factory. deleteNotInSource stays TRUE so that an artefact deleted in a PR actually disappears from dev - otherwise dev slowly diverges from the repo and stops being a valid rehearsal for test.",
+            "$comment": "Dev is the Git-connected factory. deleteNotInSource stays TRUE so that an artifact deleted in a PR actually disappears from dev - otherwise dev slowly diverges from the repo and stops being a valid rehearsal for test.",
             "deleteNotInSource": true
         },
         "test": {

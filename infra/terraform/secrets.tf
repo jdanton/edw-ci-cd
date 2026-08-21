@@ -46,7 +46,7 @@ resource "azurerm_key_vault_secret" "sql_admin_password" {
 #
 # NOT secret - these are hostnames - but ADF linked services can reference Key
 # Vault for any value, and centralising endpoints here means a rebuilt
-# environment with a new random suffix does not require an artefact change.
+# environment with a new random suffix does not require an artifact change.
 #
 # The template does NOT use this path: it rewrites endpoints through the
 # azure.datafactory.tools config CSV instead, which is more explicit and shows

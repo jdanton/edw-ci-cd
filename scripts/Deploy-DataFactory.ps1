@@ -1,7 +1,8 @@
+#!/usr/bin/env pwsh
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Deploys the ADF artefacts in src/adf to a target factory using
+    Deploys the ADF artifacts in src/adf to a target factory using
     azure.datafactory.tools.
 
 .DESCRIPTION
@@ -47,6 +48,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot '_Tooling.ps1')   # PATH repair + Resolve-RequiredTool
 
 function Write-Step { param([string]$m) Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$m) Write-Host "    $m" -ForegroundColor Green }
@@ -154,7 +157,7 @@ $opt.CreateNewInstance  = [bool]$effective['createNewInstance']
 $opt.DeployGlobalParams = [bool]$effective['deployGlobalParams']
 $opt.IgnoreLogsAtEnd    = [bool]$effective['ignoreLogsAtEnd']
 
-# Fail loudly when the config CSV names an artefact or property that does not
+# Fail loudly when the config CSV names an artifact or property that does not
 # exist. The module's default is to warn and continue, which means a typo in a
 # path silently leaves the DEV endpoint in the PROD factory.
 $opt.FailsWhenConfigItemNotFound = $true
@@ -166,10 +169,10 @@ Write-Ok "deleteNotInSource=$($opt.DeleteNotInSource)  stopStartTriggers=$($opt.
 # 5. Publish
 # ---------------------------------------------------------------------------
 
-$artefactCount = (Get-ChildItem -Path $adfRoot -Filter *.json -Recurse |
+$artifactCount = (Get-ChildItem -Path $adfRoot -Filter *.json -Recurse |
                   Where-Object { $_.FullName -notlike "*$([IO.Path]::DirectorySeparatorChar)deployment$([IO.Path]::DirectorySeparatorChar)*" }).Count
 
-Write-Step "Publishing $artefactCount artefact(s) to $dataFactoryName."
+Write-Step "Publishing $artifactCount artifact(s) to $dataFactoryName."
 
 $publishParams = @{
     RootFolder        = $adfRoot
@@ -180,7 +183,7 @@ $publishParams = @{
     Option            = $opt
 }
 
-if (-not $PSCmdlet.ShouldProcess($dataFactoryName, 'Publish ADF artefacts')) {
+if (-not $PSCmdlet.ShouldProcess($dataFactoryName, 'Publish ADF artifacts')) {
     Write-Host ''
     Write-Host 'WHATIF - not publishing. Would have run:' -ForegroundColor Yellow
     $publishParams.GetEnumerator() |
@@ -209,7 +212,7 @@ if ($env:GITHUB_STEP_SUMMARY) {
 |---|---|
 | Factory | ``$dataFactoryName`` |
 | Resource group | ``$resourceGroupName`` |
-| Artefacts | $artefactCount |
+| artifacts | $artifactCount |
 | Duration | $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s |
 | Delete not in source | ``$($opt.DeleteNotInSource)`` |
 

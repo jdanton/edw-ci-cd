@@ -30,7 +30,7 @@ variable "managed_vnet_ir_name" {
     Name of the managed-VNet integration runtime.
 
     Every linked service JSON in src/adf/linkedService/ pins this name in its
-    `connectVia` property. Keep it IDENTICAL across environments so the artefact
+    `connectVia` property. Keep it IDENTICAL across environments so the artifact
     JSON needs no per-environment rewrite - that is why it is not suffixed with
     the environment name.
   EOT
@@ -177,4 +177,50 @@ variable "log_analytics_workspace_id" {
 variable "tags" {
   type    = map(string)
   default = {}
+}
+
+# ---------------------------------------------------------------------------
+# Which managed private endpoints to create.
+#
+# Booleans, not `<id> == null` tests. `for_each` KEYS must be known at PLAN
+# time; a condition derived from a resource attribute makes the whole map shape
+# unknown on a fresh state:
+#
+#     Error: Invalid for_each argument
+#     The "for_each" map includes keys derived from resource attributes that
+#     cannot be determined until apply.
+#
+# The map VALUES (the target resource IDs) may be unknown - that is fine, and
+# is exactly the split Terraform's error message recommends.
+# ---------------------------------------------------------------------------
+
+variable "enable_key_vault_endpoint" {
+  description = "Managed private endpoint from the factory to Key Vault."
+  type        = bool
+  default     = true
+}
+
+variable "enable_synapse_endpoints" {
+  description = "Managed private endpoints from the factory to the Synapse SqlOnDemand and Dev sub-resources. Required by PL_Curate_NycTaxi_Yellow."
+  type        = bool
+  default     = true
+}
+
+variable "enable_diagnostics" {
+  description = <<-EOT
+    Create the diagnostic setting for this resource.
+
+    A BOOLEAN, not a `log_analytics_workspace_id != null` test - `count` must be
+    resolvable at PLAN time, and the workspace ID is a resource attribute that
+    does not exist until apply. Deriving count from it fails on a fresh state:
+
+        Error: Invalid count argument
+        The "count" value depends on resource attributes that cannot be
+        determined until apply, so Terraform cannot predict how many instances
+        will be created.
+
+    The ID itself may be unknown; only the PREDICATE has to be known.
+  EOT
+  type        = bool
+  default     = true
 }

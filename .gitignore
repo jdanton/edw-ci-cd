@@ -28,6 +28,20 @@ override.tf.json
 terraform.rc
 .terraform.lock.hcl.bak
 
+# Child-module lock files.
+#
+# Terraform consults ONLY the root module's lock file during init/plan/apply; a
+# lock inside modules/* is never read. These exist purely as a by-product of
+# .github/workflows/pr-validate.yml validating each module standalone.
+#
+# Committing them would add eight files that drift independently and conflict on
+# every provider bump, while pinning nothing - that job belongs to the
+# required_providers block in each module's versions.tf.
+#
+# The ROOT lock file (infra/terraform/.terraform.lock.hcl) IS committed and is
+# the one that guarantees a reproducible provider set.
+infra/terraform/modules/*/.terraform.lock.hcl
+
 # ---------------------------------------------------------------------------
 # .NET / SQL database projects
 # ---------------------------------------------------------------------------

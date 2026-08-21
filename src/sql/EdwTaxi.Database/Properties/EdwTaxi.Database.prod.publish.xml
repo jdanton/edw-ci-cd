@@ -13,7 +13,7 @@
     * GitHub Environment "prod" with required reviewers and a wait timer.
     * The prod federated credential accepts only refs/heads/main.
     * .github/workflows/sql-cd.yml runs /Action:DeployReport and
-      /Action:Script FIRST, publishes both as artefacts, and requires approval
+      /Action:Script FIRST, publishes both as artifacts, and requires approval
       before /Action:Publish. Nobody approves a production database change
       without reading the exact T-SQL that will run.
     * A point-in-time restore window of 35 days (infra/terraform envs/prod).

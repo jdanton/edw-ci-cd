@@ -11,13 +11,13 @@
 #
 # WHAT THIS DOES NOT DO
 # ---------------------
-# It does not deploy ADF artefacts, Synapse artefacts, or the database schema.
+# It does not deploy ADF artifacts, Synapse artifacts, or the database schema.
 # Those have their own workflows, triggered by their own paths. A change to a
 # pipeline JSON must not re-plan the whole platform, and a change to a VNet CIDR
 # must not republish a factory.
 #
 # The one ordering constraint between them: infrastructure must exist before
-# artefacts can deploy into it. On a first-ever deployment, run this workflow to
+# artifacts can deploy into it. On a first-ever deployment, run this workflow to
 # completion before the others. After that they are independent.
 # =============================================================================
 
@@ -113,6 +113,6 @@ jobs:
             echo "| test | ${{ needs.test.result }} |"
             echo "| prod | ${{ needs.prod.result }} |"
             echo ""
-            echo "Artefact deployments (ADF, Synapse, database schema) run in their"
+            echo "Artifact deployments (ADF, Synapse, database schema) run in their"
             echo "own workflows and are not affected by this run."
           } >> "$GITHUB_STEP_SUMMARY"

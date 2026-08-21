@@ -11,7 +11,7 @@
 #   * any connection string an ADF linked service resolves at runtime.
 #
 # ADF and Synapse read from here with their managed identities via the
-# AzureKeyVault linked service, so no secret value ever appears in an artefact
+# AzureKeyVault linked service, so no secret value ever appears in an artifact
 # JSON file or in a config CSV.
 #
 # RBAC (not access policies) is used throughout. Access policies are legacy,
@@ -145,7 +145,7 @@ resource "azurerm_key_vault_secret" "this" {
 }
 
 resource "azurerm_monitor_diagnostic_setting" "this" {
-  count = var.log_analytics_workspace_id == null ? 0 : 1
+  count = var.enable_diagnostics ? 1 : 0
 
   name                       = "diag"
   target_resource_id         = azurerm_key_vault.this.id

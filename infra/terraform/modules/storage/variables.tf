@@ -54,7 +54,7 @@ variable "filesystems" {
                  serverless CETAS. This is what ADF loads into Azure SQL.
       sandbox  - analyst scratch space. Not backed up, lifecycle-deleted.
       synapse  - the Synapse workspace's mandatory default filesystem. Holds
-                 workspace-managed artefacts, NOT your data.
+                 workspace-managed artifacts, NOT your data.
       logs     - diagnostic/audit sink (SQL auditing, ADF activity logs).
   EOT
   type = map(object({
@@ -167,4 +167,23 @@ variable "log_analytics_workspace_id" {
 variable "tags" {
   type    = map(string)
   default = {}
+}
+
+variable "enable_diagnostics" {
+  description = <<-EOT
+    Create the diagnostic setting for this resource.
+
+    A BOOLEAN, not a `log_analytics_workspace_id != null` test - `count` must be
+    resolvable at PLAN time, and the workspace ID is a resource attribute that
+    does not exist until apply. Deriving count from it fails on a fresh state:
+
+        Error: Invalid count argument
+        The "count" value depends on resource attributes that cannot be
+        determined until apply, so Terraform cannot predict how many instances
+        will be created.
+
+    The ID itself may be unknown; only the PREDICATE has to be known.
+  EOT
+  type        = bool
+  default     = true
 }

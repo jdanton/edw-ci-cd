@@ -46,6 +46,13 @@ terraform {
 provider "azurerm" {
   subscription_id = var.subscription_id
 
+  # REQUIRED. The state account sets shared_access_key_enabled = false, so
+  # there is no account key for the provider to fall back on. Without this,
+  # creating azurerm_storage_container fails with
+  # "KeyBasedAuthenticationNotPermitted" - the provider tries to list keys
+  # before it tries a token.
+  storage_use_azuread = true
+
   features {
     resource_group {
       # Bootstrap resources are long-lived; refuse to delete a state RG that

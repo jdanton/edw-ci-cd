@@ -5,7 +5,7 @@
 #
 # DEV is the only Git-connected environment and the only one where humans are
 # expected to author directly in ADF Studio and Synapse Studio. Everything else
-# receives artefacts exclusively from the pipeline.
+# receives artifacts exclusively from the pipeline.
 #
 # Cost posture: everything that can auto-pause or scale to zero does.
 # Rough steady-state cost with the pipelines idle is well under USD 100/month,
@@ -14,39 +14,83 @@
 
 environment    = "dev"
 project        = "edwtaxi"
-location       = "eastus2"
-location_short = "eus2"
+location       = "eastus"
+location_short = "eus"
 
 # From: cd bootstrap && terraform output -raw 'tfvars_fragments["dev"]'
-subscription_id = "00000000-0000-0000-0000-000000000000"
-tenant_id       = "11111111-1111-1111-1111-111111111111"
+subscription_id = "424d0f78-5980-4d31-98ec-624616db8e74"
+tenant_id       = "eabcb629-4b15-4995-9e10-86623c1e2e77"
 
 sql_aad_admin_login         = "sg-edwtaxi-sqladmin-dev"
-sql_aad_admin_object_id     = "REPLACE-ME"
+sql_aad_admin_object_id     = "11f26471-3aa7-40f4-9ead-f2cd8fcf68a5"
 synapse_aad_admin_login     = "sg-edwtaxi-synapseadmin-dev"
-synapse_aad_admin_object_id = "REPLACE-ME"
+synapse_aad_admin_object_id = "cf3de544-066c-4ca4-8252-6ec35de4e5b2"
 
 # ---------------------------------------------------------------------------
-# Networking
+# Networking - peering to the existing self-hosted runner VNet
+# ---------------------------------------------------------------------------
 #
-# vnet_address_space must NOT overlap your runner VNet, or the peering fails
-# with "AnotherPeeringWithOverlappingSpaceExists" / cannot be created at all.
-# Check yours with:
+# Runner VNet, as it exists today:
+#
+#   name          vnet-eastus-1
+#   resource grp  rg-github-runner-eus
+#   region        eastus                    <- why this environment is eastus too
+#   address space 172.16.0.0/16
+#   subnets       snet-eastus-1      172.16.0.0/24   (NAT gateway attached)
+#                 AzureBastionSubnet 172.16.1.0/26
+#   custom DNS    none -> Azure-provided DNS, so zone links work directly
+#   peerings      none
+#   NAT egress    48.195.137.225
+#
+# REGION. The runner is in eastus, so these environments are in eastus. Peering
+# across regions does work (global VNet peering), but every packet between the
+# runner and a private endpoint would then be billed as cross-region egress and
+# carry ~15ms extra latency - on a sqlpackage publish that is thousands of round
+# trips. Same-region is free and faster.
+#
+# ADDRESS SPACE. 10.60.0.0/24 does not overlap 172.16.0.0/16, so peering is
+# clean. Verify before changing either side:
 #   az network vnet show --ids <runner_vnet_id> --query addressSpace.addressPrefixes
+#
 # ---------------------------------------------------------------------------
-
 vnet_address_space              = ["10.60.0.0/24"]
 subnet_private_endpoints_prefix = "10.60.0.0/26"
-subnet_bastion_prefix           = "10.60.0.64/26"
-deploy_bastion                  = false
 
-# The VNet your self-hosted GitHub Actions runners already live in. Terraform
-# peers to it and links every privatelink.* zone to it, which is what makes
-# sqlpackage, azure.synapse.tools and the serverless DDL work at all.
+# Not used while deploy_bastion = false, but reserved so the range is not
+# re-used by something else later.
+subnet_bastion_prefix = "10.60.0.64/26"
+
+# The runner VNet already has an AzureBastionSubnet (172.16.1.0/26). If a
+# Bastion host is deployed there on the STANDARD sku, it can reach VMs in this
+# peered VNet and a second Bastion here is pure waste. Basic sku cannot do
+# cross-VNet, in which case set this true when you need break-glass access.
+deploy_bastion = false
+
+runner_vnet_id = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-github-runner-eus/providers/Microsoft.Network/virtualNetworks/vnet-eastus-1"
+
+# Creates BOTH directions. Azure peering is not implicit - one direction alone
+# sits in state "Initiated" and carries no traffic. Requires the deployment
+# identity to hold Network Contributor on vnet-eastus-1 as well as here; see
+# docs/05-runner-connectivity.md#permissions-terraform-needs-on-your-runner-vnet
+peer_runner_vnet = true
+
+# Links all nine privatelink.* zones to vnet-eastus-1. This is the step that
+# makes sqlpackage, azure.synapse.tools and the serverless DDL work at all.
 #
-#   az network vnet list --query "[].{name:name, id:id}" -o table
-runner_vnet_id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-github-runners/providers/Microsoft.Network/virtualNetworks/vnet-github-runners"
-peer_runner_vnet                = true
+# CAVEAT for this subscription: privatelink.database.windows.net (in rg
+# Infrastructure) and privatelink.vaultcore.azure.net (in rg rg-github-runner)
+# ALREADY EXIST, linked to other VNets - Infrastructure-vnet and
+# gh-runner-01VNET respectively. That is fine: a zone name may exist in several
+# resource groups, and vnet-eastus-1 is currently linked to neither.
+#
+# But a VNet can be linked to only ONE zone of a given name. If somebody later
+# links vnet-eastus-1 to the Infrastructure copy of
+# privatelink.database.windows.net, that link wins and this platform's SQL
+# server stops resolving privately - silently, with connections timing out.
+#
+# If you would rather reuse the existing zones than create new ones, set
+# create_private_dns_zones = false and supply existing_private_dns_zone_ids for
+# all nine. See docs/04-networking.md#central-dns
 link_private_dns_to_runner_vnet = true
 
 create_private_dns_zones = true

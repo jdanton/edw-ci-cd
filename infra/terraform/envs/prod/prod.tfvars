@@ -14,16 +14,16 @@
 
 environment    = "prod"
 project        = "edwtaxi"
-location       = "eastus2"
-location_short = "eus2"
+location       = "eastus"
+location_short = "eus"
 
-subscription_id = "00000000-0000-0000-0000-000000000000"
-tenant_id       = "11111111-1111-1111-1111-111111111111"
+subscription_id = "424d0f78-5980-4d31-98ec-624616db8e74"
+tenant_id       = "eabcb629-4b15-4995-9e10-86623c1e2e77"
 
 sql_aad_admin_login         = "sg-edwtaxi-sqladmin-prod"
-sql_aad_admin_object_id     = "REPLACE-ME"
+sql_aad_admin_object_id     = "fc5adbcc-e53c-474e-b71d-986bd431c569"
 synapse_aad_admin_login     = "sg-edwtaxi-synapseadmin-prod"
-synapse_aad_admin_object_id = "REPLACE-ME"
+synapse_aad_admin_object_id = "3f6a3573-16f4-4f3b-9d18-3a0a68d42b2f"
 
 # ---------------------------------------------------------------------------
 # Networking
@@ -33,11 +33,14 @@ vnet_address_space              = ["10.62.0.0/24"]
 subnet_private_endpoints_prefix = "10.62.0.0/26"
 subnet_bastion_prefix           = "10.62.0.64/26"
 
-# Bastion on in prod: when the pipeline cannot reach the data plane at 03:00,
-# you need a way in that does not involve opening a public endpoint.
-deploy_bastion = true
+# The runner VNet (vnet-eastus-1) already has an AzureBastionSubnet at
+# 172.16.1.0/26. If a STANDARD-sku Bastion is deployed there it reaches VMs in
+# this peered VNet, and a second host here is ~USD 140/month of waste. Basic sku
+# cannot do cross-VNet - flip this to true if that is what you have and you need
+# break-glass access to the private data plane.
+deploy_bastion = false
 
-runner_vnet_id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-github-runners/providers/Microsoft.Network/virtualNetworks/vnet-github-runners"
+runner_vnet_id                  = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-github-runner-eus/providers/Microsoft.Network/virtualNetworks/vnet-eastus-1"
 peer_runner_vnet                = true
 link_private_dns_to_runner_vnet = true
 

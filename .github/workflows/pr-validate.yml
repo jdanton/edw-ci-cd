@@ -42,6 +42,7 @@ concurrency:
 env:
   TERRAFORM_VERSION: '1.9.8'
   ADF_TOOLS_VERSION: '1.11.0'
+  DOTNET_MINIMUM_MAJOR: '8'
 
 jobs:
 
@@ -50,7 +51,7 @@ jobs:
   # ===========================================================================
   lint:
     name: Lint and static analysis
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 15
 
     steps:
@@ -83,7 +84,7 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Validate ADF and Synapse artefact JSON
+      - name: Validate ADF and Synapse artifact JSON
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -98,7 +99,7 @@ jobs:
             }
           }
           if ($bad -gt 0) { exit 1 }
-          Write-Host "All artefact JSON parses."
+          Write-Host "All artifact JSON parses."
 
       - name: PSScriptAnalyzer
         shell: pwsh
@@ -107,7 +108,10 @@ jobs:
           if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
             Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
           }
-          $results = Invoke-ScriptAnalyzer -Path scripts -Recurse -Severity Error, Warning
+          # Settings file rather than inline flags, so the exclusions carry
+          # their justification with them - see scripts/PSScriptAnalyzerSettings.psd1
+          $results = Invoke-ScriptAnalyzer -Path scripts -Recurse `
+                       -Settings scripts/PSScriptAnalyzerSettings.psd1
           if ($results) {
             $results | ForEach-Object {
               $level = if ($_.Severity -eq 'Error') { 'error' } else { 'warning' }
@@ -124,16 +128,31 @@ jobs:
   # ===========================================================================
   build-database:
     name: Build database project
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
+      # ---------------------------------------------------------------------
+      # NOT actions/setup-dotnet. See the long note in sql-cd.yml - on a
+      # self-hosted runner that already has the SDK from apt, setup-dotnet
+      # ignores it and hardcodes an install into /usr/share/dotnet, which the
+      # runner user cannot write.
+      # ---------------------------------------------------------------------
+      - name: Verify .NET SDK
+        run: |
+          set -euo pipefail
+          if ! command -v dotnet >/dev/null 2>&1; then
+            echo "::error::dotnet is not on PATH. Install it on the runner: sudo apt-get install -y dotnet-sdk-8.0"
+            exit 1
+          fi
+          sdk=$(dotnet --version)
+          echo "dotnet: $(command -v dotnet)  SDK: $sdk"
+          if [ "${sdk%%.*}" -lt "${DOTNET_MINIMUM_MAJOR}" ]; then
+            echo "::error::SDK $sdk found; Microsoft.Build.Sql needs .NET ${DOTNET_MINIMUM_MAJOR} or later."
+            exit 1
+          fi
 
       - name: dotnet build
         run: |
@@ -169,9 +188,25 @@ jobs:
   # ===========================================================================
   plan:
     name: Plan (dev)
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 30
     needs: [lint]
+
+    # ---------------------------------------------------------------------
+    # JOB-level, not step-level. azure/login authenticates the Azure CLI only;
+    # Terraform reads its own ARM_* variables, in the provider AND in the
+    # backend (which never sees the provider block).
+    #
+    # These sat on individual steps until `terraform init` passed and the very
+    # next step - a script that shells out to `terraform output` - failed with
+    # "a Tenant ID must be configured when authenticating with OIDC". Anything
+    # in the job may invoke Terraform, so the credentials belong to the job.
+    # ---------------------------------------------------------------------
+    env:
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CI_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -206,9 +241,6 @@ jobs:
         run: |
           terraform init -reconfigure -no-color \
             -backend-config=envs/dev/backend.hcl
-        env:
-          ARM_USE_OIDC: 'true'
-
       - name: terraform plan
         id: plan
         working-directory: infra/terraform
@@ -218,9 +250,6 @@ jobs:
             -var-file=envs/dev/dev.tfvars \
             -out=tfplan 2>&1 | tee plan.txt
           terraform show -no-color tfplan > plan-full.txt
-        env:
-          ARM_USE_OIDC: 'true'
-
       - name: Summarise plan
         if: always()
         shell: pwsh
@@ -265,9 +294,25 @@ jobs:
   # ===========================================================================
   verify-config:
     name: Verify deployment configuration
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 15
     needs: [lint]
+
+    # ---------------------------------------------------------------------
+    # JOB-level, not step-level. azure/login authenticates the Azure CLI only;
+    # Terraform reads its own ARM_* variables, in the provider AND in the
+    # backend (which never sees the provider block).
+    #
+    # These sat on individual steps until `terraform init` passed and the very
+    # next step - a script that shells out to `terraform output` - failed with
+    # "a Tenant ID must be configured when authenticating with OIDC". Anything
+    # in the job may invoke Terraform, so the credentials belong to the job.
+    # ---------------------------------------------------------------------
+    env:
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CI_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -287,9 +332,6 @@ jobs:
       - name: terraform init (dev)
         working-directory: infra/terraform
         run: terraform init -reconfigure -no-color -backend-config=envs/dev/backend.hcl
-        env:
-          ARM_USE_OIDC: 'true'
-
       - name: Verify no hard-coded endpoints
         shell: pwsh
         run: ./scripts/New-DeploymentConfig.ps1 -Environment dev -Verify

@@ -4,7 +4,7 @@
 #
 # TWO DEPLOYMENTS, IN ORDER, EVERY TIME.
 #
-#   1. Workspace ARTEFACTS   src/synapse/workspace  -> azure.synapse.tools
+#   1. Workspace artifacts  src/synapse/workspace  -> azure.synapse.tools
 #                            Linked services, SQL script tabs, notebooks.
 #                            Deployed through the Dev REST API at
 #                            <workspace>.dev.azuresynapse.net.
@@ -14,7 +14,7 @@
 #                            file formats, views, procedures, grants.
 #
 # Step 2 is not optional and is not covered by step 1. This is the single most
-# common misunderstanding about deploying Synapse: a "SQL script" artefact is a
+# common misunderstanding about deploying Synapse: a "SQL script" artifact is a
 # saved query TAB in Studio. Deploying it does not execute it. If you only run
 # step 1, the workspace looks perfect in Studio and every ADF pipeline fails,
 # because edw_lake does not exist.
@@ -44,13 +44,13 @@ on:
         default: 'all'
         type: choice
         options: [all, dev, test, prod]
-      skip_artefacts:
-        description: 'Skip workspace artefacts, deploy serverless SQL only'
+      skip_artifacts:
+        description: 'Skip workspace artifacts, deploy serverless SQL only'
         required: false
         default: false
         type: boolean
       skip_serverless:
-        description: 'Skip serverless SQL, deploy workspace artefacts only'
+        description: 'Skip serverless SQL, deploy workspace artifacts only'
         required: false
         default: false
         type: boolean
@@ -71,12 +71,12 @@ jobs:
 
   validate:
     name: Validate
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate artefact JSON
+      - name: Validate artifact JSON
         shell: pwsh
         run: |
           $bad = 0
@@ -120,7 +120,7 @@ jobs:
     uses: ./.github/workflows/_synapse-deploy.yml
     with:
       environment: dev
-      skip_artefacts: ${{ inputs.skip_artefacts == true }}
+      skip_artifacts: ${{ inputs.skip_artifacts == true }}
       skip_serverless: ${{ inputs.skip_serverless == true }}
     secrets: inherit
 
@@ -134,7 +134,7 @@ jobs:
     uses: ./.github/workflows/_synapse-deploy.yml
     with:
       environment: test
-      skip_artefacts: ${{ inputs.skip_artefacts == true }}
+      skip_artifacts: ${{ inputs.skip_artifacts == true }}
       skip_serverless: ${{ inputs.skip_serverless == true }}
     secrets: inherit
 
@@ -148,6 +148,6 @@ jobs:
     uses: ./.github/workflows/_synapse-deploy.yml
     with:
       environment: prod
-      skip_artefacts: ${{ inputs.skip_artefacts == true }}
+      skip_artifacts: ${{ inputs.skip_artifacts == true }}
       skip_serverless: ${{ inputs.skip_serverless == true }}
     secrets: inherit

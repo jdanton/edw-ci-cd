@@ -179,7 +179,7 @@ resource "azurerm_storage_data_lake_gen2_filesystem" "this" {
 
   properties = {
     # Blob metadata values must be base64. Keeps the "why does this exist"
-    # answer attached to the artefact itself.
+    # answer attached to the artifact itself.
     description = base64encode(each.value.description)
   }
 
@@ -304,7 +304,7 @@ resource "azurerm_storage_management_policy" "this" {
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_diagnostic_setting" "blob" {
-  count = var.log_analytics_workspace_id == null ? 0 : 1
+  count = var.enable_diagnostics ? 1 : 0
 
   name                       = "diag-blob"
   target_resource_id         = "${azurerm_storage_account.this.id}/blobServices/default"
@@ -323,7 +323,7 @@ resource "azurerm_monitor_diagnostic_setting" "blob" {
 }
 
 resource "azurerm_monitor_diagnostic_setting" "account" {
-  count = var.log_analytics_workspace_id == null ? 0 : 1
+  count = var.enable_diagnostics ? 1 : 0
 
   name                       = "diag-account"
   target_resource_id         = azurerm_storage_account.this.id

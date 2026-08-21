@@ -146,7 +146,7 @@ The awkward case is ADF and Synapse, where the two overlap. The line drawn here:
 | Managed identity and RBAC | |
 
 The rule that produces this split: **anything a linked service must be able to
-*reference* has to exist before artefacts deploy.** A linked service pinning
+*reference* has to exist before artifacts deploy.** A linked service pinning
 `connectVia: IR-ManagedVNet` cannot deploy if that runtime does not exist, so
 the runtime is infrastructure.
 

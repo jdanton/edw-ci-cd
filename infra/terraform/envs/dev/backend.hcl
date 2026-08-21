@@ -12,8 +12,8 @@
 # ignored (harmlessly) when you run locally with `az login`.
 # ---------------------------------------------------------------------------
 
-resource_group_name  = "rg-edwtaxi-tfstate-eastus2"
-storage_account_name = "REPLACE-ME-FROM-BOOTSTRAP"
+resource_group_name  = "rg-edwtaxi-tfstate-eastus"
+storage_account_name = "stedwtaxitfstate69gc4"
 container_name       = "tfstate"
 key                  = "dev.tfstate"
 use_azuread_auth     = true

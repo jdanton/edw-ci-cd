@@ -80,3 +80,25 @@ tags = {
   cost-center = "FIN-1234"
   owner       = "data-platform@your-org.com"
 }
+
+# ---------------------------------------------------------------------------
+# OIDC subject format
+#
+# GitHub is migrating OIDC subjects from name-based to ID-based ("immutable"):
+#
+#   legacy     repo:your-org/edw-ci-cd:pull_request
+#   immutable  repo:your-org@7385792/edw-ci-cd@1341714815:pull_request
+#
+# A mismatch fails at azure/login with AADSTS700213 and no other symptom.
+#
+# Check which form YOUR repository issues:
+#   gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+# and read `sub_claim_prefix`. During the rollout, `use_immutable_subject:
+# false` does NOT reliably mean legacy subjects are issued - trust the prefix.
+#
+# Get the IDs:
+#   gh api repos/<owner>/<repo> --jq '{owner_id: .owner.id, repo_id: .id}'
+# ---------------------------------------------------------------------------
+use_immutable_subject_claim = true
+github_owner_id             = 0   # REPLACE
+github_repository_id        = 0   # REPLACE

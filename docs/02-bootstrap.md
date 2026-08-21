@@ -244,7 +244,7 @@ Order matters on a first deployment. Serverless before ADF, because ADF's
 # 1. Synapse serverless objects — the edw_lake database and everything in it
 ./scripts/Deploy-ServerlessSql.ps1 -Environment dev
 
-# 2. Synapse workspace artefacts
+# 2. Synapse workspace artifacts
 ./scripts/Deploy-Synapse.ps1 -Environment dev
 
 # 3. Azure SQL schema
@@ -266,7 +266,7 @@ sqlpackage /Action:Publish \
   /v:DimDateStartYear=2009 \
   /v:DimDateEndYear=2035
 
-# 4. Data Factory artefacts
+# 4. Data Factory artifacts
 ./scripts/Deploy-DataFactory.ps1 -Environment dev
 ```
 

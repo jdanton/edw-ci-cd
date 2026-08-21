@@ -41,7 +41,15 @@ locals {
   # Deployment identities use the `environment:` subject so that GitHub
   # Environment protection rules (required reviewers, wait timers, branch
   # restrictions) are actually load-bearing rather than decorative.
-  repo_slug = "${var.github_owner}/${var.github_repository}"
+  #
+  # The slug itself is either name-based (legacy) or ID-based (immutable) - see
+  # the long comment on var.use_immutable_subject_claim. Every subject below is
+  # built from this local, so switching forms is a one-line change here.
+  repo_slug = var.use_immutable_subject_claim ? format(
+    "%s@%d/%s@%d",
+    var.github_owner, var.github_owner_id,
+    var.github_repository, var.github_repository_id,
+  ) : "${var.github_owner}/${var.github_repository}"
 
   tags = merge(var.tags, {
     "terraform-module" = "bootstrap"
@@ -114,10 +122,45 @@ resource "azurerm_storage_account" "tfstate" {
   }
 }
 
+# ---------------------------------------------------------------------------
+# The operator running bootstrap needs DATA-PLANE access to create the
+# container below.
+#
+# This is the "Contributor does not grant blob access" trap, hitting the very
+# first thing this repository does. Being subscription OWNER is not enough:
+# Owner confers management-plane rights, and blobs are a separate permission
+# surface. Combined with shared_access_key_enabled = false - so there is no key
+# to fall back on - creating the container fails with
+# AuthorizationPermissionMismatch unless this assignment exists.
+#
+# Same trap, same fix, three more times later:
+#   infra/terraform/rbac.tf     deployer_lake_contributor
+#   infra/terraform/secrets.tf  deployer_keyvault_secrets_officer
+#   docs/12-troubleshooting.md#storage-403
+# ---------------------------------------------------------------------------
+
+resource "azurerm_role_assignment" "operator_state_blob" {
+  scope                = azurerm_storage_account.tfstate.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = data.azuread_client_config.current.object_id
+
+  description = "The human (or SP) running bootstrap - required to create the state container and, later, to run terraform against this backend from a workstation."
+}
+
+# Entra role assignments take up to a couple of minutes to reach the storage
+# data plane. Without this pause the container creation below races the grant
+# and fails on a first apply roughly half the time.
+resource "time_sleep" "wait_for_state_blob_rbac" {
+  depends_on      = [azurerm_role_assignment.operator_state_blob]
+  create_duration = "60s"
+}
+
 resource "azurerm_storage_container" "tfstate" {
   name                  = local.state_container_name
   storage_account_id    = azurerm_storage_account.tfstate.id
   container_access_type = "private"
+
+  depends_on = [time_sleep.wait_for_state_blob_rbac]
 }
 
 # ---------------------------------------------------------------------------
@@ -162,6 +205,16 @@ resource "azuread_application_federated_identity_credential" "deploy_environment
   audiences      = ["api://AzureADTokenExchange"]
   issuer         = "https://token.actions.githubusercontent.com"
   subject        = "repo:${local.repo_slug}:environment:${each.key}"
+
+  # Catches the immutable-subject misconfiguration HERE, with a message that
+  # names the fix - rather than letting format() interpolate a null into every
+  # subject and surfacing hours later as AADSTS700213 in a workflow run.
+  lifecycle {
+    precondition {
+      condition     = !var.use_immutable_subject_claim || (var.github_owner_id != null && var.github_repository_id != null)
+      error_message = "use_immutable_subject_claim = true requires github_owner_id and github_repository_id. Get them with: gh api repos/${var.github_owner}/${var.github_repository} --jq '{owner_id: .owner.id, repo_id: .id}'"
+    }
+  }
 }
 
 # Some maintenance workflows (drift detection, scheduled data quality runs) run

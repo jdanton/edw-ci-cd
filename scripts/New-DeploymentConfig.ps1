@@ -1,3 +1,4 @@
+#!/usr/bin/env pwsh
 #Requires -Version 7.0
 <#
 .SYNOPSIS
@@ -56,6 +57,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot '_Tooling.ps1')   # PATH repair + Resolve-RequiredTool
+
 function Write-Step { param([string]$m) Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$m) Write-Host "    $m" -ForegroundColor Green }
 
@@ -70,7 +73,58 @@ Write-Step "Reading Terraform outputs for '$Environment'."
 Push-Location $terraformDir
 try {
     $outputJson = terraform output -json deployment_config 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $terraformExitCode = $LASTEXITCODE
+
+    # ---------------------------------------------------------------------
+    # "Output not found" means the environment has never been applied - the
+    # state file is empty. That is a NORMAL state on a brand-new environment,
+    # and the two callers want opposite things from it:
+    #
+    #   -Verify   (pr-validate) There is nothing to verify against yet. Failing
+    #             here would make the FIRST pull request on a fresh repository
+    #             red for a reason the author did not cause and cannot fix
+    #             without deploying infrastructure - which is exactly what the
+    #             pull request is asking permission to do. Skip, and say so.
+    #
+    #   generate  (a deployment) This is fatal. Artifacts cannot be deployed
+    #             into infrastructure that does not exist, and the endpoints
+    #             they need are the outputs that are missing.
+    # ---------------------------------------------------------------------
+    $stateIsEmpty = ($terraformExitCode -ne 0) -and
+                    ("$outputJson" -match 'Output "deployment_config" not found|No outputs found')
+
+    if ($stateIsEmpty) {
+        if ($Verify) {
+            Write-Host ''
+            Write-Host "::notice::Environment '$Environment' has no Terraform state yet, so there is nothing to verify the committed configuration against. Skipping. This check becomes meaningful once the environment has been deployed once."
+            Write-Ok "Skipped - '$Environment' not deployed yet."
+            exit 0
+        }
+
+        # Written with Write-Host rather than embedded in the throw: PowerShell's
+        # default error view collapses newlines in an exception message, which
+        # turns a carefully formatted set of instructions into one unreadable
+        # paragraph. Print the detail, throw a single line.
+        Write-Host ''
+        Write-Host "Environment '$Environment' has not been deployed." -ForegroundColor Red
+        Write-Host ''
+        Write-Host "  'terraform output deployment_config' found no outputs, which means the"
+        Write-Host "  state file is empty. Artifacts cannot be deployed into infrastructure"
+        Write-Host "  that does not exist - the endpoints they need ARE the missing outputs."
+        Write-Host ''
+        Write-Host '  Deploy it first:' -ForegroundColor Yellow
+        Write-Host "      gh workflow run infra-cd.yml -f environment=$Environment"
+        Write-Host ''
+        Write-Host "  ...or locally, from a host inside the runner's VNet:" -ForegroundColor Yellow
+        Write-Host '      cd infra/terraform'
+        Write-Host "      terraform init -reconfigure -backend-config=envs/$Environment/backend.hcl"
+        Write-Host "      terraform apply -var-file=envs/$Environment/$Environment.tfvars"
+        Write-Host ''
+
+        throw "Environment '$Environment' is not deployed - see the instructions above."
+    }
+
+    if ($terraformExitCode -ne 0) {
         throw @"
 terraform output failed. Initialise the backend for this environment first:
 
@@ -81,6 +135,7 @@ Raw error:
 $outputJson
 "@
     }
+
     $tf = $outputJson | ConvertFrom-Json
 }
 finally {
@@ -95,7 +150,7 @@ Write-Ok "Storage      : $($tf.storageAccountName)"
 # ---------------------------------------------------------------------------
 # 2. The generated rows
 #
-# `path` is relative to the artefact's `properties` node - NOT the document
+# `path` is relative to the artifact's `properties` node - NOT the document
 # root. So for {"name":"LS_X","properties":{"typeProperties":{"url":"..."}}}
 # the path is `typeProperties.url`. Getting this wrong is silent: the tool
 # reports the row as not-found rather than failing.

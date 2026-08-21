@@ -34,7 +34,7 @@ output "serverless_sql_endpoint" {
 }
 
 output "dev_endpoint" {
-  description = "Artefact/development REST endpoint, e.g. https://syn-edwtaxi-dev-ab12.dev.azuresynapse.net. This is what azure.synapse.tools connects to."
+  description = "Artifact/development REST endpoint, e.g. https://syn-edwtaxi-dev-ab12.dev.azuresynapse.net. This is what azure.synapse.tools connects to."
   value       = azurerm_synapse_workspace.this.connectivity_endpoints["dev"]
 }
 

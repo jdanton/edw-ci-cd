@@ -24,7 +24,7 @@
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_metric_alert" "adf_pipeline_failed" {
-  count = var.data_factory_id == null ? 0 : 1
+  count = var.enable_data_factory_alerts ? 1 : 0
 
   name                = "alert-${var.name_prefix}-adf-pipeline-failed"
   resource_group_name = var.resource_group_name
@@ -58,7 +58,7 @@ resource "azurerm_monitor_metric_alert" "adf_pipeline_failed" {
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "adf_pipeline_overrunning" {
-  count = var.data_factory_id == null ? 0 : 1
+  count = var.enable_data_factory_alerts ? 1 : 0
 
   name                = "alert-${var.name_prefix}-adf-pipeline-overrunning"
   resource_group_name = var.resource_group_name
@@ -112,7 +112,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "adf_pipeline_overrunn
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "synapse_data_processed" {
-  count = var.synapse_workspace_id == null ? 0 : 1
+  count = var.enable_synapse_alerts ? 1 : 0
 
   name                = "alert-${var.name_prefix}-synapse-data-processed"
   resource_group_name = var.resource_group_name
@@ -157,7 +157,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "synapse_data_processe
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_metric_alert" "sql_cpu" {
-  count = var.sql_database_id == null ? 0 : 1
+  count = var.enable_sql_alerts ? 1 : 0
 
   name                = "alert-${var.name_prefix}-sql-cpu"
   resource_group_name = var.resource_group_name
@@ -184,7 +184,7 @@ resource "azurerm_monitor_metric_alert" "sql_cpu" {
 }
 
 resource "azurerm_monitor_metric_alert" "sql_storage" {
-  count = var.sql_database_id == null ? 0 : 1
+  count = var.enable_sql_alerts ? 1 : 0
 
   name                = "alert-${var.name_prefix}-sql-storage"
   resource_group_name = var.resource_group_name

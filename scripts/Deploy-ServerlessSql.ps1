@@ -1,3 +1,4 @@
+#!/usr/bin/env pwsh
 #Requires -Version 7.0
 <#
 .SYNOPSIS
@@ -11,8 +12,8 @@
     for the Data Factory managed identity.
 
     THIS IS THE OTHER HALF OF THE SYNAPSE DEPLOYMENT. Deploy-Synapse.ps1
-    publishes workspace ARTEFACTS through the Dev REST API; none of the objects
-    below are artefacts, so no artefact API can create them. They are ordinary
+    publishes workspace artifacts through the Dev REST API; none of the objects
+    below are artifacts, so no artifact API can create them. They are ordinary
     T-SQL and need a TDS connection.
 
     Scripts run in filename order. Every one is idempotent - CREATE OR ALTER,
@@ -52,6 +53,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot '_Tooling.ps1')   # PATH repair + Resolve-RequiredTool
 
 function Write-Step { param([string]$m) Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$m) Write-Host "    $m" -ForegroundColor Green }

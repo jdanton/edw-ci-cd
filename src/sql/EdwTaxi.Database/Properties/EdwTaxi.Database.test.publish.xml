@@ -55,7 +55,7 @@
       at the next release and the incident recurs.
 
       When this blocks a deployment, find out what changed (the sql-cd workflow
-      publishes a DeployReport artefact showing exactly that), decide whether it
+      publishes a DeployReport artifact showing exactly that), decide whether it
       belongs in the project, and either add it or remove it deliberately.
     -->
     <BlockWhenDriftDetected>True</BlockWhenDriftDetected>

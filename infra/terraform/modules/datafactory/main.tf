@@ -4,7 +4,7 @@
 # Azure Data Factory - the orchestrator.
 #
 # ---------------------------------------------------------------------------
-# THE INFRASTRUCTURE / ARTEFACT BOUNDARY
+# THE INFRASTRUCTURE / ARTIFACT BOUNDARY
 # ---------------------------------------------------------------------------
 # ADF blurs the line between "infrastructure" and "code". Terraform can create
 # pipelines and linked services; so can azure.datafactory.tools. If both do,
@@ -22,7 +22,7 @@
 #   RBAC / managed identity |  factory/ (global parameters)
 #
 # Rationale: the left column is network-and-identity shaped, changes rarely, and
-# needs to exist BEFORE any artefact can be published (a linked service that
+# needs to exist BEFORE any artifact can be published (a linked service that
 # references IR-ManagedVNet cannot deploy if that IR does not exist). The right
 # column is code, is authored in ADF Studio, and belongs in Git.
 #
@@ -61,15 +61,15 @@ locals {
         description        = "Copy sink and Stored Procedure activity against the serving database."
       }
     },
-    var.key_vault_id == null ? {} : {
+    var.enable_key_vault_endpoint ? {
       "keyvault" = {
         target_resource_id = var.key_vault_id
         subresource_name   = "vault"
         fqdns              = []
         description        = "LS_KeyVault resolves secrets at pipeline runtime."
       }
-    },
-    var.synapse_workspace_id == null ? {} : {
+    } : {},
+    var.enable_synapse_endpoints ? {
       "synapse-sqlondemand" = {
         target_resource_id = var.synapse_workspace_id
         subresource_name   = "SqlOnDemand"
@@ -82,7 +82,7 @@ locals {
         fqdns              = []
         description        = "Synapse Notebook / pipeline activities, if you add them later."
       }
-    },
+    } : {},
   )
 
   managed_private_endpoints = merge(local.default_managed_private_endpoints, var.additional_managed_private_endpoints)
@@ -108,7 +108,7 @@ resource "azurerm_data_factory" "this" {
 
   # Managed VNet. Once enabled, the AutoResolveIntegrationRuntime still exists
   # but is NOT in the managed VNet - only IRs explicitly created with
-  # virtual_network_enabled = true are. Artefacts must reference the managed IR
+  # virtual_network_enabled = true are. artifacts must reference the managed IR
   # by name or their traffic leaves via public endpoints.
   managed_virtual_network_enabled = true
 
@@ -127,7 +127,7 @@ resource "azurerm_data_factory" "this" {
   # DELIBERATELY OPTIONAL AND DEFAULT-OFF. Reasons:
   #
   #  1. Only the DEV factory should ever be Git-connected. Test and prod run in
-  #     "live mode" and receive artefacts exclusively from the pipeline. A
+  #     "live mode" and receive artifacts exclusively from the pipeline. A
   #     Git-connected prod factory invites someone to publish from Studio.
   #  2. Configuring Git here creates a chicken-and-egg with repository
   #     creation, and the first `terraform apply` after connecting frequently
@@ -157,7 +157,7 @@ resource "azurerm_data_factory" "this" {
 # ---------------------------------------------------------------------------
 # Integration runtime inside the managed VNet
 #
-# Every artefact in src/adf/ references this by name. If you rename it here you
+# Every artifact in src/adf/ references this by name. If you rename it here you
 # must rename it in every linked service JSON, or add the mapping to the config
 # CSV so azure.datafactory.tools rewrites it per environment.
 #
@@ -255,7 +255,7 @@ resource "azurerm_private_endpoint" "factory" {
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_diagnostic_setting" "this" {
-  count = var.log_analytics_workspace_id == null ? 0 : 1
+  count = var.enable_diagnostics ? 1 : 0
 
   name                       = "diag"
   target_resource_id         = azurerm_data_factory.this.id

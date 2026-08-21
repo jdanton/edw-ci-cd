@@ -1,3 +1,4 @@
+#!/usr/bin/env pwsh
 #Requires -Version 7.0
 <#
 .SYNOPSIS
@@ -40,18 +41,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot '_Tooling.ps1')   # PATH repair + Resolve-RequiredTool
+
 function Write-Step { param([string]$m) Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$m) Write-Host "    $m" -ForegroundColor Green }
 function Write-Warn { param([string]$m) Write-Host "    !! $m" -ForegroundColor Yellow }
 
-if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-    throw 'The GitHub CLI (gh) is required. https://cli.github.com/  Authenticate with: gh auth login'
-}
+Resolve-RequiredTool -Name 'gh' `
+    -InstallHint 'Install the GitHub CLI: https://cli.github.com/  (brew install gh)' `
+    -PostCheck { gh auth status *>$null; $LASTEXITCODE -eq 0 } `
+    -FailureMessage 'The GitHub CLI is installed but not authenticated. Run: gh auth login' | Out-Null
 
-$authStatus = gh auth status 2>&1
-if ($LASTEXITCODE -ne 0) {
-    throw "gh is not authenticated. Run: gh auth login`n$authStatus"
-}
+Resolve-RequiredTool -Name 'terraform' `
+    -InstallHint 'Install Terraform: https://developer.hashicorp.com/terraform/install  (brew install terraform)' | Out-Null
 
 Write-Step 'Reading bootstrap outputs.'
 
@@ -169,25 +171,58 @@ Write-Host @"
    tier, so it is set by hand - and it should be reviewed by a human anyway.
 
 2. SELF-HOSTED RUNNER LABELS
-   The workflows target `runs-on: [self-hosted, linux, x64, edw]`.
+   The workflows target [self-hosted, Linux, X64, edw], falling back to that
+   list only when the RUNNER_LABELS repository VARIABLE is unset.
 
-   Confirm your runners carry the `edw` label:
-     Settings -> Actions -> Runners
+   Check what your runners actually report:
+     gh api repos/$Repository/actions/runners --jq '.runners[] | {name, status, labels: [.labels[].name]}'
 
-   If they use different labels, change RUNNER_LABELS in
-   .github/workflows/*.yml. Do NOT switch to ubuntu-latest: a GitHub-hosted
-   runner cannot reach any private endpoint in this platform, and the failures
-   look like authentication problems rather than network ones.
+   Then either add the label:
+     Settings -> Actions -> Runners -> <runner> -> Labels -> add 'edw'
 
-3. BRANCH PROTECTION on $DefaultBranch
+   ...or declare what they already have, which is better if the runner is
+   shared with other repositories:
+     gh variable set RUNNER_LABELS --repo $Repository --body '["self-hosted","Linux","X64"]'
+
+   A label added through the UI is WIPED if the runner re-registers - a rebuilt
+   VM, config.sh --replace, or anything ephemeral/containerised. For those, put
+   --labels edw in the registration instead.
+
+   Do NOT switch to ubuntu-latest. The lint and build jobs would pass and every
+   deployment job would hang: a GitHub-hosted runner cannot reach any private
+   endpoint in this platform, and the failures look like authentication problems
+   rather than network ones.
+
+3. NETWORK CONTRIBUTOR ON THE RUNNER VNET
+   Terraform creates the VNet peering in BOTH directions - Azure peering is not
+   implicit, and one side alone sits in state 'Initiated' carrying no traffic.
+   That means the deployment identities need write access on the runner's VNet,
+   which lives outside every resource group this platform owns.
+
+   Run this BEFORE the first infrastructure apply. Skip it and the apply fails
+   partway through on Microsoft.Network/virtualNetworks/peer/action, having
+   already created the EDW VNet and half its private endpoints.
+
+     RUNNER_VNET=<resource id of your runner VNet>
+     for e in dev test prod; do
+       SP=`$(az ad sp list --display-name "sp-<project>-github-deploy-`$e" --query "[0].id" -o tsv)
+       az role assignment create --assignee-object-id "`$SP" \
+         --assignee-principal-type ServicePrincipal \
+         --role "Network Contributor" --scope "`$RUNNER_VNET"
+     done
+
+   Alternative: set peer_runner_vnet = false in each tfvars and create both
+   peerings by hand. See docs/05-runner-connectivity.md.
+
+4. BRANCH PROTECTION on $DefaultBranch
    Settings -> Branches -> Add rule
      - Require a pull request before merging
      - Require status checks: pr-validate
      - Do not allow bypassing the above settings
 
-4. VERIFY THE FEDERATION
+5. VERIFY THE FEDERATION
    Push a branch and open a pull request. The pr-validate workflow runs
-   `terraform plan` using the read-only CI identity. If it authenticates, the
+   terraform plan using the read-only CI identity. If it authenticates, the
    OIDC federation is correct.
 
 "@ -ForegroundColor Gray
