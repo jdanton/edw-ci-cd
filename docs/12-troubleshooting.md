@@ -345,6 +345,51 @@ az network private-endpoint-connection list --id "$(terraform -chdir=infra/terra
 az network private-endpoint-connection approve --id <connection-id> --description "Approved"
 ```
 
+### Private DNS zone will not delete: `CannotDeleteResource` {#dns-zone-wont-delete}
+
+```
+Error: deleting Private Dns Zone (... privatelink.sql.azuresynapse.net):
+409 Conflict: CannotDeleteResource: Cannot delete resource while nested
+resources exist. Some existing nested resource IDs include:
+'.../virtualNetworkLinks/link-runner'
+```
+
+Check whether that link actually exists:
+
+```bash
+az network private-dns link vnet show -g <rg> -z <zone> -n link-runner
+```
+
+If it returns **`NotFound`** while the zone delete keeps naming it, this is an
+Azure resource-provider inconsistency, not your configuration. The link is gone
+from the data path but the zone's internal nested-resource index has not caught
+up. It can persist for tens of minutes, and retrying `terraform destroy` in that
+window fails identically.
+
+Terraform ordering is not the problem: the link is destroyed before the zone
+(the link references the zone name, so the dependency is real and honoured).
+Adding sleeps to the destroy path does not reliably help either.
+
+What works:
+
+```bash
+# ARM orchestrates the whole group through a different path
+az group delete -n <rg> --yes --no-wait
+```
+
+Then reconcile Terraform, which will refresh, find nothing, and empty the
+state:
+
+```bash
+terraform destroy -var-file=envs/<env>/<env>.tfvars
+```
+
+This platform creates NINE private DNS zones per environment, so a
+tear-down-and-rebuild cycle in dev meets this more often than most. The residual
+cost while you wait is trivial - a Private DNS zone with no links and no queries
+is about USD 0.50/month - so it is usually right to issue the group delete and
+move on rather than sit and watch it.
+
 ### `Error acquiring the state lock`
 
 **Check nothing is actually running** — the Actions tab, and the Activity Log —
