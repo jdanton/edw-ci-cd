@@ -1,7 +1,8 @@
+#!/usr/bin/env pwsh
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Deploys Synapse WORKSPACE ARTEFACTS from src/synapse/workspace using
+    Deploys Synapse WORKSPACE artifacts from src/synapse/workspace using
     azure.synapse.tools.
 
 .DESCRIPTION
@@ -9,19 +10,19 @@
 
     IMPORTANT - THIS IS HALF OF THE SYNAPSE DEPLOYMENT.
 
-      This script    workspace ARTEFACTS: linked services, datasets, notebooks,
+      This script    workspace ARTIFACTS: linked services, datasets, notebooks,
                      SQL script tabs, Synapse pipelines, triggers. They live in
-                     the workspace artefact store and are reached through the
+                     the workspace artifact store and are reached through the
                      Dev API at <workspace>.dev.azuresynapse.net.
 
       Deploy-ServerlessSql.ps1
                      everything INSIDE the serverless database: the database
                      itself, schemas, external data sources, file formats,
                      views, procedures and grants. These are ordinary T-SQL
-                     objects. No artefact API can create them.
+                     objects. No artifact API can create them.
 
     That distinction is the most common misconception about deploying Synapse.
-    A "SQL script" artefact is a saved query TAB in Studio - deploying it does
+    A "SQL script" artifact is a saved query TAB in Studio - deploying it does
     not execute anything. If you only run this script, the workspace will look
     correct in Studio and every pipeline will fail, because edw_lake does not
     exist.
@@ -48,6 +49,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot '_Tooling.ps1')   # PATH repair + Resolve-RequiredTool
 
 function Write-Step { param([string]$m) Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$m) Write-Host "    $m" -ForegroundColor Green }
@@ -165,8 +168,8 @@ $workspaceParameterName =
 
 Write-Ok "Using -$workspaceParameterName"
 
-$artefactCount = (Get-ChildItem -Path $workspaceRoot -Filter *.json -Recurse -ErrorAction SilentlyContinue).Count
-Write-Step "Publishing $artefactCount workspace artefact(s) to $workspaceName."
+$artifactCount = (Get-ChildItem -Path $workspaceRoot -Filter *.json -Recurse -ErrorAction SilentlyContinue).Count
+Write-Step "Publishing $artifactCount workspace artifact(s) to $workspaceName."
 
 $publishParams = @{
     RootFolder             = $workspaceRoot
@@ -177,7 +180,7 @@ $publishParams = @{
     Option                 = $opt
 }
 
-if (-not $PSCmdlet.ShouldProcess($workspaceName, 'Publish Synapse artefacts')) {
+if (-not $PSCmdlet.ShouldProcess($workspaceName, 'Publish Synapse artifacts')) {
     Write-Host 'WHATIF - not publishing.' -ForegroundColor Yellow
     exit 0
 }
@@ -190,18 +193,18 @@ Write-Ok "Published in $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s."
 
 if ($env:GITHUB_STEP_SUMMARY) {
     @"
-## Synapse workspace artefacts - ``$Environment``
+## Synapse workspace artifacts - ``$Environment``
 
 | | |
 |---|---|
 | Workspace | ``$workspaceName`` |
-| Artefacts | $artefactCount |
+| artifacts | $artifactCount |
 | Duration | $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s |
 
-> This deployed workspace ARTEFACTS only. The serverless SQL objects
+> This deployed workspace artifacts only. The serverless SQL objects
 > (``edw_lake``, external data sources, views, procedures) are deployed
 > separately by ``Deploy-ServerlessSql.ps1``.
 "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 }
 
-Write-Step 'Synapse artefact deployment complete. Serverless SQL objects are deployed separately.'
+Write-Step 'Synapse artifact deployment complete. Serverless SQL objects are deployed separately.'

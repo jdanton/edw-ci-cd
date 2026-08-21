@@ -1,3 +1,4 @@
+#!/usr/bin/env pwsh
 #Requires -Version 7.0
 <#
 .SYNOPSIS
@@ -62,6 +63,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot '_Tooling.ps1')   # PATH repair + Resolve-RequiredTool
+
 function Write-Step { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$Message) Write-Host "    OK  $Message" -ForegroundColor Green }
 function Write-Warn { param([string]$Message) Write-Host "    !!  $Message" -ForegroundColor Yellow }
@@ -71,9 +74,10 @@ if ([string]::IsNullOrWhiteSpace($TargetResourceIds)) {
     exit 0
 }
 
-if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
-    throw 'The Azure CLI (az) is not on PATH. This script is invoked by Terraform and needs an authenticated az context.'
-}
+Resolve-RequiredTool -Name 'az' `
+    -InstallHint 'Install the Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli' `
+    -PostCheck { az account show *>$null; $LASTEXITCODE -eq 0 } `
+    -FailureMessage 'The Azure CLI is installed but not authenticated. This script is invoked by Terraform and needs an authenticated context - run az login, or azure/login@v2 in CI.' | Out-Null
 
 $ids = $TargetResourceIds.Split(',', [StringSplitOptions]::RemoveEmptyEntries) |
        ForEach-Object { $_.Trim() } |

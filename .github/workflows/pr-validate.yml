@@ -50,7 +50,7 @@ jobs:
   # ===========================================================================
   lint:
     name: Lint and static analysis
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 15
 
     steps:
@@ -83,7 +83,7 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Validate ADF and Synapse artefact JSON
+      - name: Validate ADF and Synapse artifact JSON
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -98,7 +98,7 @@ jobs:
             }
           }
           if ($bad -gt 0) { exit 1 }
-          Write-Host "All artefact JSON parses."
+          Write-Host "All artifact JSON parses."
 
       - name: PSScriptAnalyzer
         shell: pwsh
@@ -107,7 +107,10 @@ jobs:
           if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
             Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
           }
-          $results = Invoke-ScriptAnalyzer -Path scripts -Recurse -Severity Error, Warning
+          # Settings file rather than inline flags, so the exclusions carry
+          # their justification with them - see scripts/PSScriptAnalyzerSettings.psd1
+          $results = Invoke-ScriptAnalyzer -Path scripts -Recurse `
+                       -Settings scripts/PSScriptAnalyzerSettings.psd1
           if ($results) {
             $results | ForEach-Object {
               $level = if ($_.Severity -eq 'Error') { 'error' } else { 'warning' }
@@ -124,7 +127,7 @@ jobs:
   # ===========================================================================
   build-database:
     name: Build database project
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 15
 
     steps:
@@ -169,7 +172,7 @@ jobs:
   # ===========================================================================
   plan:
     name: Plan (dev)
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 30
     needs: [lint]
 
@@ -265,7 +268,7 @@ jobs:
   # ===========================================================================
   verify-config:
     name: Verify deployment configuration
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 15
     needs: [lint]
 

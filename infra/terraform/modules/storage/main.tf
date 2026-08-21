@@ -179,7 +179,7 @@ resource "azurerm_storage_data_lake_gen2_filesystem" "this" {
 
   properties = {
     # Blob metadata values must be base64. Keeps the "why does this exist"
-    # answer attached to the artefact itself.
+    # answer attached to the artifact itself.
     description = base64encode(each.value.description)
   }
 

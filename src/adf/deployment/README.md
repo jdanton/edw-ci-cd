@@ -41,7 +41,7 @@ type,name,path,value
 
 * **type** — `linkedService`, `pipeline`, `dataset`, `trigger`, `dataflow`,
   `integrationRuntime`, `managedVirtualNetwork`, `factory`
-* **name** — the artefact name. `*` wildcards are supported, e.g. `TR_*`
+* **name** — the artifact name. `*` wildcards are supported, e.g. `TR_*`
 * **path** — dot/bracket path **relative to the object's `properties` node**.
   So for a linked service whose JSON is
   `{"name":"LS_X","properties":{"typeProperties":{"url":"..."}}}` the path is

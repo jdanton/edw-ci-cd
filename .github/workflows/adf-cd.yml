@@ -2,7 +2,7 @@
 # adf-cd.yml
 # =============================================================================
 #
-# Deploys the ADF artefacts in src/adf using azure.datafactory.tools.
+# Deploys the ADF artifacts in src/adf using azure.datafactory.tools.
 #
 # DEPLOYING FROM THE COLLABORATION BRANCH, NOT adf_publish
 # --------------------------------------------------------
@@ -14,19 +14,19 @@
 #                        template and an ARMTemplateParametersForFactory.json
 #                        nobody understands.
 #
-#   collaboration branch The artefact JSON as authored. What this template uses.
+#   collaboration branch The artifact JSON as authored. What this template uses.
 #
 # The second is better for three concrete reasons:
 #
 #   1. NO CLICKING. With adf_publish, a deployment cannot happen until a human
 #      opens Studio and presses Publish. That is not continuous delivery, and it
-#      means the deployed artefact does not correspond to any reviewed commit.
+#      means the deployed artifact does not correspond to any reviewed commit.
 #
 #   2. REVIEWABLE DIFFS. A pull request shows "added a retry policy to the copy
 #      activity". The ARM-template equivalent shows a few hundred lines of
 #      re-serialised template with the change buried inside.
 #
-#   3. GRANULARITY. azure.datafactory.tools deploys artefact by artefact, so a
+#   3. GRANULARITY. azure.datafactory.tools deploys artifact by artifact, so a
 #      single broken linked service fails on its own instead of rolling back an
 #      entire ARM deployment.
 #
@@ -75,8 +75,8 @@ env:
 jobs:
 
   validate:
-    name: Validate artefacts
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    name: Validate artifacts
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 20
 
     steps:
@@ -105,9 +105,9 @@ jobs:
             Write-Host "::error::Test-AdfCode reported $($result.ErrorCount) error(s)."
             exit 1
           }
-          Write-Host 'ADF artefact validation passed.'
+          Write-Host 'ADF artifact validation passed.'
 
-      - name: Report artefact inventory
+      - name: Report artifact inventory
         shell: pwsh
         run: |
           $rows = Get-ChildItem src/adf -Directory |
@@ -122,7 +122,7 @@ jobs:
           $table = ($rows | ForEach-Object { "| $($_.Type) | $($_.Count) |" }) -join "`n"
 
           Add-Content $env:GITHUB_STEP_SUMMARY @"
-          ## ADF artefacts
+          ## ADF artifacts
 
           | Type | Count |
           |---|---|
@@ -140,7 +140,7 @@ jobs:
       github.event_name == 'push' ||
       inputs.environment == 'all' ||
       inputs.environment == 'dev'
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 45
     environment: dev
     steps:
@@ -181,7 +181,7 @@ jobs:
       always() &&
       (needs.dev.result == 'success' || needs.dev.result == 'skipped') &&
       (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'test')
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 45
     environment: test
     steps:
@@ -215,7 +215,7 @@ jobs:
       always() &&
       (needs.test.result == 'success' || needs.test.result == 'skipped') &&
       (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'prod')
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 45
     environment: prod
     steps:

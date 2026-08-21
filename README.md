@@ -29,8 +29,8 @@ from the public internet.
 |---|---|
 | [`bootstrap/`](bootstrap/) | Applied once, by a human. Terraform state storage, Entra apps with OIDC federation, admin groups. |
 | [`infra/terraform/`](infra/terraform/) | The platform. One root module, three environments selected by `-var-file` and `-backend-config`. |
-| [`src/adf/`](src/adf/) | Data Factory artefacts in the exact layout [`azure.datafactory.tools`](https://github.com/Azure-Player/azure.datafactory.tools) expects. |
-| [`src/synapse/`](src/synapse/) | Workspace artefacts for [`azure.synapse.tools`](https://github.com/Azure-Player/azure.synapse.tools), **plus** the serverless T-SQL that no artefact API can deploy. |
+| [`src/adf/`](src/adf/) | Data Factory artifacts in the exact layout [`azure.datafactory.tools`](https://github.com/Azure-Player/azure.datafactory.tools) expects. |
+| [`src/synapse/`](src/synapse/) | Workspace artifacts for [`azure.synapse.tools`](https://github.com/Azure-Player/azure.synapse.tools), **plus** the serverless T-SQL that no artifact API can deploy. |
 | [`src/sql/`](src/sql/) | SDK-style `.sqlproj` (`Microsoft.Build.Sql`). Builds to a DACPAC with `dotnet build` on Linux. |
 | [`scripts/`](scripts/) | PowerShell deployment and diagnostic scripts. Every workflow is a thin wrapper around one of these, so everything is runnable locally. |
 | [`.github/workflows/`](.github/workflows/) | Ten workflows: PR validation, four CD pipelines, backfill, drift detection. |
@@ -43,7 +43,7 @@ from the public internet.
 **1. You need a self-hosted runner inside a VNet.** This is not a preference.
 Every data-plane endpoint has public network access disabled, so a
 GitHub-hosted runner cannot create an ADLS filesystem, publish a Synapse
-artefact, run the serverless DDL, or deploy a DACPAC. The workflows target
+artifact, run the serverless DDL, or deploy a DACPAC. The workflows target
 `runs-on: [self-hosted, linux, X64, edw]`. See
 [05-runner-connectivity](docs/05-runner-connectivity.md).
 
@@ -138,7 +138,7 @@ Each of these is explained where it lives; this is the index.
 
 | Decision | Where | Why |
 |---|---|---|
-| Deploy ADF from the **collaboration branch**, not `adf_publish` | [`adf-cd.yml`](.github/workflows/adf-cd.yml) | No human clicking "Publish"; reviewable diffs; per-artefact failures. |
+| Deploy ADF from the **collaboration branch**, not `adf_publish` | [`adf-cd.yml`](.github/workflows/adf-cd.yml) | No human clicking "Publish"; reviewable diffs; per-artifact failures. |
 | Terraform owns integration runtimes and managed VNets; the tools own pipelines | [`modules/datafactory/main.tf`](infra/terraform/modules/datafactory/main.tf) | Otherwise the two flip-flop on alternate deployments. |
 | **No** `MERGE` statement in the fact load | [`etl.usp_Merge_YellowTaxiTrip`](src/sql/EdwTaxi.Database/Programmability/Stored%20Procedures/etl.usp_Merge_YellowTaxiTrip.sql) | Known correctness bugs; bad on columnstore; partition replacement matches how the TLC restates data. |
 | Clustered columnstore with **no** nonclustered index | [`fact.YellowTaxiTrip`](src/sql/EdwTaxi.Database/Tables/fact/YellowTaxiTrip.sql) | Month-at-a-time inserts make rowgroups month-aligned, so segment elimination already does the job. |
@@ -161,7 +161,7 @@ Each of these is explained where it lives; this is the index.
 | [03 — Terraform](docs/03-terraform.md) | Module layout, state, promotion, and the cycle-avoidance rules. |
 | [04 — Networking](docs/04-networking.md) | Private endpoints, managed VNets, and the nine DNS zones. |
 | [05 — Runner connectivity](docs/05-runner-connectivity.md) | Making your existing self-hosted runners work with this platform. |
-| [06 — Data Factory](docs/06-data-factory.md) | Artefacts, the config CSV, trigger state, tumbling windows. |
+| [06 — Data Factory](docs/06-data-factory.md) | Artifacts, the config CSV, trigger state, tumbling windows. |
 | [07 — Synapse](docs/07-synapse.md) | Serverless, CETAS, collation, and the two-halves deployment. |
 | [08 — Azure SQL](docs/08-azure-sql.md) | SDK-style projects, publish profiles, and safe migrations. |
 | [09 — CI/CD workflows](docs/09-cicd-workflows.md) | Every workflow, what triggers it, and what gates it. |

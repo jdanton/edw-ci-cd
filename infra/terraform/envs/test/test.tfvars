@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # infra/terraform/envs/test/test.tfvars
 #
-# TEST is a production rehearsal. Its job is to prove that the artefacts
+# TEST is a production rehearsal. Its job is to prove that the artifacts
 # promoted out of dev deploy cleanly against an environment that no human has
 # hand-edited. Sizing stays cheap; SHAPE matches prod.
 #
@@ -11,16 +11,16 @@
 
 environment    = "test"
 project        = "edwtaxi"
-location       = "eastus2"
-location_short = "eus2"
+location       = "eastus"
+location_short = "eus"
 
-subscription_id = "00000000-0000-0000-0000-000000000000"
-tenant_id       = "11111111-1111-1111-1111-111111111111"
+subscription_id = "424d0f78-5980-4d31-98ec-624616db8e74"
+tenant_id       = "eabcb629-4b15-4995-9e10-86623c1e2e77"
 
 sql_aad_admin_login         = "sg-edwtaxi-sqladmin-test"
-sql_aad_admin_object_id     = "REPLACE-ME"
+sql_aad_admin_object_id     = "954ca8b4-0f1f-48a5-bea8-9598b6feca6e"
 synapse_aad_admin_login     = "sg-edwtaxi-synapseadmin-test"
-synapse_aad_admin_object_id = "REPLACE-ME"
+synapse_aad_admin_object_id = "b70bea72-226a-4384-a31e-60c6c93e1574"
 
 # ---------------------------------------------------------------------------
 # Networking - a different /24, still peered to the same runner VNet.
@@ -31,7 +31,7 @@ subnet_private_endpoints_prefix = "10.61.0.0/26"
 subnet_bastion_prefix           = "10.61.0.64/26"
 deploy_bastion                  = false
 
-runner_vnet_id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-github-runners/providers/Microsoft.Network/virtualNetworks/vnet-github-runners"
+runner_vnet_id                  = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-github-runner-eus/providers/Microsoft.Network/virtualNetworks/vnet-eastus-1"
 peer_runner_vnet                = true
 link_private_dns_to_runner_vnet = true
 
@@ -52,7 +52,7 @@ key_vault_purge_protection_enabled = true
 
 # ---------------------------------------------------------------------------
 # Data Factory - NO Git integration. Test runs in live mode and receives
-# artefacts only from .github/workflows/adf-cd.yml.
+# artifacts only from .github/workflows/adf-cd.yml.
 # ---------------------------------------------------------------------------
 
 adf_ir_time_to_live_min              = 15

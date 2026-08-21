@@ -71,7 +71,7 @@ caller resolves the public IP and hangs.
 | `privatelink.vaultcore.azure.net` | Key Vault `vault` | ADF/Synapse linked services, Terraform secrets |
 | `privatelink.database.windows.net` | SQL `sqlServer` | `sqlpackage`, ADF Copy sink, SSMS |
 | `privatelink.sql.azuresynapse.net` | Synapse `Sql` **and** `SqlOnDemand` | serverless DDL, ADF Script activity, Azure Data Studio |
-| `privatelink.dev.azuresynapse.net` | Synapse `Dev` | **`azure.synapse.tools`** — artefact deployment |
+| `privatelink.dev.azuresynapse.net` | Synapse `Dev` | **`azure.synapse.tools`** — artifact deployment |
 | `privatelink.azuresynapse.net` | Private Link Hub `Web` | Synapse Studio from inside the network |
 | `privatelink.datafactory.azure.net` | ADF `dataFactory` | ADF runtime, self-hosted IR, Studio data preview |
 | `privatelink.adf.azure.com` | ADF `portal` | ADF Studio authoring UI |

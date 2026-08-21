@@ -1,7 +1,7 @@
 # =============================================================================
 # _synapse-deploy.yml   (reusable)
 # =============================================================================
-# Deploys both halves of Synapse to ONE environment: workspace artefacts, then
+# Deploys both halves of Synapse to ONE environment: workspace artifacts, then
 # the serverless SQL objects. Called three times by synapse-cd.yml.
 # =============================================================================
 
@@ -13,7 +13,7 @@ on:
       environment:
         required: true
         type: string
-      skip_artefacts:
+      skip_artifacts:
         required: false
         type: boolean
         default: false
@@ -24,7 +24,7 @@ on:
       runner_labels:
         required: false
         type: string
-        default: '["self-hosted","linux","X64","edw"]'
+        default: '["self-hosted","Linux","X64","edw"]'
       terraform_version:
         required: false
         type: string
@@ -79,10 +79,10 @@ jobs:
         run: ./scripts/Test-PlatformConnectivity.ps1 -Environment ${{ inputs.environment }}
 
       # ---------------------------------------------------------------------
-      # 1. Workspace artefacts
+      # 1. Workspace artifacts
       # ---------------------------------------------------------------------
-      - name: Deploy workspace artefacts
-        if: ${{ !inputs.skip_artefacts }}
+      - name: Deploy workspace artifacts
+        if: ${{ !inputs.skip_artifacts }}
         shell: pwsh
         run: |
           ./scripts/Deploy-Synapse.ps1 `
@@ -92,7 +92,7 @@ jobs:
       # ---------------------------------------------------------------------
       # 2. Serverless SQL objects
       #
-      # Runs even if the artefact step was skipped, because the two are
+      # Runs even if the artifact step was skipped, because the two are
       # genuinely independent - and the serverless objects are the half that
       # pipelines actually depend on.
       # ---------------------------------------------------------------------

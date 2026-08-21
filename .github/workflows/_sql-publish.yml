@@ -9,7 +9,7 @@
 #                      operation flagged as causing data loss.
 #   2. Script        - the exact T-SQL that would run.
 #   3. (approval)    - the GitHub Environment gate sits between the run being
-#                      queued and this job starting, so both artefacts from the
+#                      queued and this job starting, so both artifacts from the
 #                      PREVIOUS environment are available to the reviewer.
 #   4. Publish       - apply.
 #   5. Verify        - prove the objects exist and the ADF user is present.
@@ -33,7 +33,7 @@ on:
       runner_labels:
         required: false
         type: string
-        default: '["self-hosted","linux","X64","edw"]'
+        default: '["self-hosted","Linux","X64","edw"]'
       terraform_version:
         required: false
         type: string
@@ -237,7 +237,7 @@ jobs:
       - name: Script only - not applied
         if: ${{ inputs.script_only }}
         run: |
-          echo "::notice::script_only was requested. The deployment script is in the deployment-plan-${{ inputs.environment }} artefact; nothing was applied."
+          echo "::notice::script_only was requested. The deployment script is in the deployment-plan-${{ inputs.environment }} artifact; nothing was applied."
 
       # -----------------------------------------------------------------------
       # 4. Verify

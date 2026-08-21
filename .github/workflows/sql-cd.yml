@@ -6,7 +6,7 @@
 # to dev, then test, then prod.
 #
 # BUILD ONCE, DEPLOY MANY. The DACPAC is built in the first job and passed to
-# the others as an artefact. Rebuilding per environment would mean the thing
+# the others as an artifact. Rebuilding per environment would mean the thing
 # approved for production is not the thing that was tested - a subtle and
 # entirely avoidable class of release bug.
 #
@@ -17,7 +17,7 @@
 # THE PROD GATE
 # -------------
 # Before prod is touched, the workflow runs /Action:DeployReport and
-# /Action:Script and publishes both as artefacts. The GitHub Environment
+# /Action:Script and publishes both as artifacts. The GitHub Environment
 # approval then blocks until a human has read the exact T-SQL that will run.
 # Nobody should approve a production schema change they have not read.
 #
@@ -65,7 +65,7 @@ jobs:
 
   build:
     name: Build DACPAC
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 20
 
     steps:

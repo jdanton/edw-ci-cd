@@ -54,7 +54,7 @@ variable "filesystems" {
                  serverless CETAS. This is what ADF loads into Azure SQL.
       sandbox  - analyst scratch space. Not backed up, lifecycle-deleted.
       synapse  - the Synapse workspace's mandatory default filesystem. Holds
-                 workspace-managed artefacts, NOT your data.
+                 workspace-managed artifacts, NOT your data.
       logs     - diagnostic/audit sink (SQL auditing, ADF activity logs).
   EOT
   type = map(object({

@@ -84,7 +84,7 @@ locals {
     "dev" = {
       subresource = "Dev"
       zone        = "privatelink.dev.azuresynapse.net"
-      description = "Artefact/development REST API. azure.synapse.tools (Publish-SynapseFromJson) talks to this. Without it, artefact deployment cannot work at all."
+      description = "Artifact/development REST API. azure.synapse.tools (Publish-SynapseFromJson) talks to this. Without it, artifact deployment cannot work at all."
     }
   }
 }
@@ -111,7 +111,7 @@ resource "azurerm_synapse_workspace" "this" {
   location            = var.location
 
   # Every workspace demands a default ADLS Gen2 filesystem. It holds workspace
-  # metadata and Spark artefacts - NOT your data. Keep it separate from the
+  # metadata and Spark artifacts - NOT your data. Keep it separate from the
   # medallion filesystems so nobody confuses the two.
   storage_data_lake_gen2_filesystem_id = var.default_filesystem_id
 
@@ -154,12 +154,12 @@ resource "azurerm_synapse_workspace" "this" {
 #
 # Both point at the SAME Entra group, deliberately:
 #
-#   azurerm_synapse_workspace_aad_admin      -> Synapse RBAC (Studio, artefacts)
+#   azurerm_synapse_workspace_aad_admin      -> Synapse RBAC (Studio, artifacts)
 #   azurerm_synapse_workspace_sql_aad_admin  -> serverless SQL endpoint (sysadmin)
 #
 # The GitHub Actions deployment service principal is a member of that group
 # (bootstrap/main.tf puts it there), which is what lets a single OIDC token
-# both publish artefacts with azure.synapse.tools AND run the serverless DDL in
+# both publish artifacts with azure.synapse.tools AND run the serverless DDL in
 # src/synapse/serverless/ - with no password and no extra grant.
 # ---------------------------------------------------------------------------
 

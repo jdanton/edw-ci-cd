@@ -140,7 +140,7 @@ GO
        ALTER ROLE edw_reader ADD MEMBER [sg-edwtaxi-readers];
 
    Deliberately not automated: who can read the warehouse is an access decision,
-   not a deployment artefact, and a deployment pipeline that can grant data
+   not a deployment artifact, and a deployment pipeline that can grant data
    access is a deployment pipeline that can exfiltrate data.
    --------------------------------------------------------------------------- */
 IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'edw_reader' AND type = 'R')

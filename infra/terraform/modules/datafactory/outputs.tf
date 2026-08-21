@@ -31,7 +31,7 @@ output "tenant_id" {
 }
 
 output "managed_vnet_ir_name" {
-  description = "Name of the managed-VNet integration runtime that artefacts reference via connectVia."
+  description = "Name of the managed-VNet integration runtime that artifacts reference via connectVia."
   value       = azurerm_data_factory_integration_runtime_azure.managed_vnet.name
 }
 

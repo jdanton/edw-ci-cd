@@ -120,13 +120,22 @@ variable "state_storage_allowed_ips" {
     Public IPs / CIDRs permitted to reach the Terraform state account.
 
     Leave EMPTY to keep the account open to any network (default-action Allow).
-    That is the template default because GitHub-hosted runners have no stable
-    egress IP, and the state account is protected by Entra RBAC + OIDC anyway.
+    That is the template default, and it is defensible: the account has
+    shared_access_key_enabled = false, so the only way in is an Entra token held
+    by an OIDC-federated principal. There is no key to leak.
 
-    If you run *all* Terraform from the self-hosted runners created in
-    infra/terraform/modules/runner (which sit behind a static NAT Gateway IP),
-    set this to that IP and the account flips to default-action Deny. That is
-    the recommended production posture - see docs/05-self-hosted-runners.md.
+    Tighten it once your runners are proven. All Terraform in this template runs
+    on your VNet-attached self-hosted runners, so there is exactly one egress IP
+    to allow - typically the NAT gateway on the runner subnet:
+
+        az network nat gateway show -g <rg> -n <natgw> --query publicIpAddresses
+
+    or, from a job on the runner itself:
+
+        curl -s https://api.ipify.org
+
+    Setting this flips the account to default-action Deny. See
+    docs/05-runner-connectivity.md#outbound-internet.
   EOT
   type        = list(string)
   default     = []

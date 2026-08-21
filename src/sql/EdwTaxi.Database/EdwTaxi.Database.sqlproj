@@ -67,7 +67,7 @@
     <GenerateCreateScript>False</GenerateCreateScript>
 
     <!-- Deterministic builds make the DACPAC byte-identical for identical
-         sources, so a rebuild does not produce a spurious "changed" artefact. -->
+         sources, so a rebuild does not produce a spurious "changed" artifact. -->
     <Deterministic>True</Deterministic>
     <NetCoreBuild>True</NetCoreBuild>
   </PropertyGroup>
@@ -78,7 +78,7 @@
     ==========================================================================
     Values are supplied at PUBLISH time (sqlpackage /v:Name=Value), not at
     build time, so one DACPAC deploys to all three environments. That is the
-    whole point of the artefact: build once, deploy many.
+    whole point of the artifact: build once, deploy many.
 
     Defaults here exist only so that `dotnet build` succeeds and so that a
     developer publishing to a local container gets something sensible.

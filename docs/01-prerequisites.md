@@ -138,7 +138,7 @@ Every data-plane endpoint in this platform has public network access disabled.
 A GitHub-hosted runner cannot:
 
 - create ADLS filesystems (`terraform apply` calls the dfs data plane)
-- publish Synapse artefacts (`<workspace>.dev.azuresynapse.net`)
+- publish Synapse artifacts (`<workspace>.dev.azuresynapse.net`)
 - run the serverless DDL (`<workspace>-ondemand.sql.azuresynapse.net`, TDS)
 - publish the DACPAC (`sqlpackage`, TDS 1433)
 

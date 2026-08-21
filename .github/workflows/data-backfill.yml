@@ -65,7 +65,7 @@ concurrency:
 jobs:
   backfill:
     name: Backfill ${{ inputs.start_year_month }} to ${{ inputs.end_year_month }} (${{ inputs.environment }})
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 720          # a multi-year backfill genuinely takes hours
     environment: ${{ inputs.environment }}
 

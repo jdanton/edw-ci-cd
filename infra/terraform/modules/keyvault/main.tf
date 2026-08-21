@@ -11,7 +11,7 @@
 #   * any connection string an ADF linked service resolves at runtime.
 #
 # ADF and Synapse read from here with their managed identities via the
-# AzureKeyVault linked service, so no secret value ever appears in an artefact
+# AzureKeyVault linked service, so no secret value ever appears in an artifact
 # JSON file or in a config CSV.
 #
 # RBAC (not access policies) is used throughout. Access policies are legacy,

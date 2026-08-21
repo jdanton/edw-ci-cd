@@ -47,7 +47,7 @@ concurrency:
 jobs:
   detect:
     name: Plan ${{ matrix.environment }}
-    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","linux","X64","edw"]') }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 30
 
     strategy:

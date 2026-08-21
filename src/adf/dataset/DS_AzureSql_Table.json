@@ -1,7 +1,7 @@
 {
     "name": "DS_AzureSql_Table",
     "properties": {
-        "description": "Generic parameterised Azure SQL table. One dataset serves every staging table in the warehouse - pass schemaName and tableName at activity level. Resist the urge to create DS_AzureSql_StgYellowTaxiTrip, DS_AzureSql_StgTaxiZone and so on: each concrete dataset is another artefact to deploy, review and keep in sync, and none of them carries information the activity does not already have.",
+        "description": "Generic parameterised Azure SQL table. One dataset serves every staging table in the warehouse - pass schemaName and tableName at activity level. Resist the urge to create DS_AzureSql_StgYellowTaxiTrip, DS_AzureSql_StgTaxiZone and so on: each concrete dataset is another artifact to deploy, review and keep in sync, and none of them carries information the activity does not already have.",
         "linkedServiceName": {
             "referenceName": "LS_AzureSql_Edw",
             "type": "LinkedServiceReference"

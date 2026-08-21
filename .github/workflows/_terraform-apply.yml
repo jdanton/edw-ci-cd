@@ -37,7 +37,7 @@ on:
       runner_labels:
         required: false
         type: string
-        default: '["self-hosted","linux","X64","edw"]'
+        default: '["self-hosted","Linux","X64","edw"]'
     outputs:
       resource_group_name:
         value: ${{ jobs.terraform.outputs.resource_group_name }}
@@ -131,7 +131,7 @@ jobs:
           $lines = $plan -split "`n"
           if ($lines.Count -gt 400) {
             $plan = ($lines[0..200] -join "`n") +
-                    "`n`n... $($lines.Count - 400) lines omitted, see the artefact ...`n`n" +
+                    "`n`n... $($lines.Count - 400) lines omitted, see the artifact ...`n`n" +
                     ($lines[-200..-1] -join "`n")
           }
 

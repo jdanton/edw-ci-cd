@@ -30,7 +30,7 @@ variable "managed_vnet_ir_name" {
     Name of the managed-VNet integration runtime.
 
     Every linked service JSON in src/adf/linkedService/ pins this name in its
-    `connectVia` property. Keep it IDENTICAL across environments so the artefact
+    `connectVia` property. Keep it IDENTICAL across environments so the artifact
     JSON needs no per-environment rewrite - that is why it is not suffixed with
     the environment name.
   EOT
