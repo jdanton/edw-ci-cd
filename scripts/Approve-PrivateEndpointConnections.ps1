@@ -79,10 +79,10 @@ Resolve-RequiredTool -Name 'az' `
     -PostCheck { az account show *>$null; $LASTEXITCODE -eq 0 } `
     -FailureMessage 'The Azure CLI is installed but not authenticated. This script is invoked by Terraform and needs an authenticated context - run az login, or azure/login@v2 in CI.' | Out-Null
 
-$ids = $TargetResourceIds.Split(',', [StringSplitOptions]::RemoveEmptyEntries) |
+$ids = @($TargetResourceIds.Split(',', [StringSplitOptions]::RemoveEmptyEntries) |
        ForEach-Object { $_.Trim() } |
        Where-Object   { $_ } |
-       Select-Object -Unique
+       Select-Object -Unique)
 
 Write-Step "Checking $($ids.Count) target resource(s) for pending private endpoint connections."
 if ($ConnectionPrefix) {
@@ -115,6 +115,8 @@ function Get-Connection {
 
 foreach ($id in $ids) {
     $resourceName = $id.Split('/')[-1]
+
+  try {
 
     # ---------------------------------------------------------------------
     # A managed private endpoint takes a little while to register on the
@@ -151,10 +153,13 @@ foreach ($id in $ids) {
     while ($attempt -lt $MaxAttempts) {
         $attempt++
 
-        $pending = Get-Connection -ResourceId $id -Query $pendingQuery
+        # @() at the CALL SITE. A function returning @() unrolls to $null on
+        # return, and $null.Count throws under Set-StrictMode. Wrapping inside
+        # the function does not help - it is the return that discards it.
+        $pending = @(Get-Connection -ResourceId $id -Query $pendingQuery)
         if ($pending.Count -gt 0) { break }
 
-        $anyApproved = Get-Connection -ResourceId $id -Query $approvedQuery
+        $anyApproved = @(Get-Connection -ResourceId $id -Query $approvedQuery)
         if ($anyApproved.Count -gt 0) {
             Write-Ok "$resourceName - $($anyApproved.Count) connection(s) already approved."
             break
@@ -196,6 +201,15 @@ foreach ($id in $ids) {
             $totalApproved++
         }
     }
+  }
+  catch {
+    # Belt and braces around the whole per-resource block. The failure mode this
+    # guards against has bitten twice: a terminating StrictMode error part way
+    # through, which skips every REMAINING target and leaves their endpoints
+    # Pending. Record it and carry on to the next resource.
+    Write-Warn "$resourceName - $($_.Exception.Message)"
+    $failures += "$resourceName (script error: $($_.Exception.Message))"
+  }
 }
 
 Write-Step "Done. $totalApproved of $totalPending pending connection(s) approved."
