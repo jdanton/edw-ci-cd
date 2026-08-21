@@ -45,6 +45,11 @@ on:
         required: false
         default: false
         type: boolean
+      allow_destroy:
+        description: 'Allow destroying data-bearing resources (see the guard)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   id-token: write
@@ -67,6 +72,7 @@ jobs:
     with:
       environment: dev
       apply: ${{ !inputs.plan_only }}
+      allow_destroy: ${{ inputs.allow_destroy || false }}
     secrets: inherit
 
   test:
@@ -94,6 +100,7 @@ jobs:
     with:
       environment: test
       apply: ${{ !inputs.plan_only }}
+      allow_destroy: ${{ inputs.allow_destroy || false }}
     secrets: inherit
 
   prod:
@@ -119,6 +126,7 @@ jobs:
     with:
       environment: prod
       apply: ${{ !inputs.plan_only }}
+      allow_destroy: ${{ inputs.allow_destroy || false }}
     secrets: inherit
 
   summary:

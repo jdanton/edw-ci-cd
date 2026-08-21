@@ -44,6 +44,25 @@ resource "azurerm_mssql_server" "this" {
 
   # SQL-auth admin. Only created when Entra-only auth is off. Even then the
   # password is random, stored in Key Vault, and never used by the pipeline.
+  #
+  # This is SAFE here, and the identical-looking line in modules/synapse was
+  # not. Do not "harmonise" the two - the difference is real and it is one
+  # flag in the provider schema:
+  #
+  #   azurerm_mssql_server.administrator_login          optional, COMPUTED
+  #   azurerm_synapse_workspace.sql_administrator_login  optional, NOT computed
+  #
+  # Both are ForceNew. Both get backfilled by Azure when you pass nothing -
+  # this server currently reports "CloudSA05a7428b", which nobody chose.
+  #
+  # Because this attribute is Computed, null means "keep whatever Azure set"
+  # and produces no diff. Because Synapse's is not, null there meant "set this
+  # to nothing", which diffed against the backfilled value and replaced the
+  # workspace on EVERY apply until ignore_changes was added.
+  #
+  # So: no lifecycle block is needed on this resource, and adding null-handling
+  # to Synapse was not optional. Verify with:
+  #   terraform providers schema -json | jq '...administrator_login'
   administrator_login          = var.entra_only_authentication ? null : var.sql_admin_login
   administrator_login_password = var.entra_only_authentication ? null : random_password.sql_admin[0].result
 

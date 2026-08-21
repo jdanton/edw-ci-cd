@@ -452,24 +452,88 @@ terraform import 'module.storage.azurerm_storage_account.this' \
   "/subscriptions/.../storageAccounts/stedwtaxideva7k2"
 ```
 
-### Plan shows a replacement you did not ask for
+### Plan shows a replacement you did not ask for {#unwanted-replacement}
 
 ```
 # module.synapse.azurerm_synapse_workspace.this must be replaced
 ```
 
-Something create-time-only changed. Usually
-`data_exfiltration_protection_enabled` or `managed_virtual_network_enabled`.
 **Replacing a Synapse workspace destroys every serverless database, view and
-external table.**
+external table.** Never let this one through on autopilot.
+
+Find the actual attribute before theorising. The reason is always printed:
 
 ```bash
-terraform plan -var-file=envs/prod/prod.tfvars | grep -B10 'forces replacement'
+terraform plan -var-file=envs/dev/dev.tfvars -no-color \
+  | grep -B2 'forces replacement'
 ```
 
-Revert the tfvars change. If it is genuinely required, plan the rebuild: export
-the serverless DDL (it is all in `src/synapse/serverless/`, so it is already
-version-controlled), replace, redeploy.
+If a tfvars change caused it — `managed_virtual_network_enabled`,
+`data_exfiltration_protection_enabled` — revert it, or plan the rebuild
+deliberately: the serverless DDL is all in `src/synapse/serverless/`, so it is
+already version-controlled.
+
+#### When nobody changed anything {#forcenew-null-drift}
+
+This platform hit a nastier version, and it is worth understanding because it
+is not specific to Synapse.
+
+```
+- sql_administrator_login = "sqladminuser" -> null # forces replacement
+```
+
+Nobody set `sqladminuser`. **Azure did.** The module runs Entra-only auth and
+deliberately passes no SQL administrator, because there is no password anywhere
+in this platform. But the API has no way to store "none" — it backfills a
+default. So state held `sqladminuser`, configuration held `null`, and the
+attribute is ForceNew.
+
+The result: **every apply destroyed and recreated the workspace**, taking its
+managed private endpoints, diagnostic settings, role assignments and every ADF
+endpoint pointing at it along with it. On a configuration nobody had touched.
+It read as flaky networking for most of a day — the managed private endpoints
+really were failing, because they were being created against a workspace
+Terraform was concurrently replacing.
+
+The fix is `ignore_changes`, in `modules/synapse/main.tf`:
+
+```hcl
+lifecycle {
+  ignore_changes = [sql_administrator_login]
+}
+```
+
+Safe because `azuread_authentication_only = true` refuses SQL authentication
+outright — whatever Azure recorded in that field can never be used to connect.
+
+**The general rule.** When a resource is ForceNew on an attribute you leave
+null, check whether the provider marks it `Computed`:
+
+```bash
+terraform providers schema -json \
+  | jq '.provider_schemas[].resource_schemas.azurerm_mssql_server
+        .block.attributes.administrator_login'
+```
+
+- `computed: true` — null means *"keep whatever Azure set"*. No diff. Safe.
+- `computed: false` — null means *"set this to nothing"*. Diffs against the
+  backfilled value, and if ForceNew, replaces the resource on every apply.
+
+That single flag is the entire difference between `azurerm_mssql_server`
+(Computed — safe, needs no lifecycle block) and `azurerm_synapse_workspace`
+(not Computed — replaced every time). Both are ForceNew; both get backfilled;
+the SQL server currently reports an administrator called `CloudSA05a7428b` that
+nobody chose. See the note in `modules/sql/main.tf` before making the two
+resources "consistent" — they look identical and they are not.
+
+**Why plan alone did not save us.** The plan said exactly what it was going to
+do, every time. It was read as noise because the surrounding runs were failing
+on network errors. Read the destroy list before approving an apply, especially
+in an environment you believe is only being patched:
+
+```bash
+grep -E 'must be replaced|will be destroyed|^Plan:' plan.txt
+```
 
 ---
 

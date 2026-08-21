@@ -34,6 +34,17 @@ on:
         required: false
         type: boolean
         default: true
+      allow_destroy:
+        description: |
+          Permit an apply whose plan destroys data-bearing resources.
+
+          Defaults to false. The guard step downstream fails the job rather
+          than silently rebuilding a Synapse workspace, SQL server, storage
+          account or Key Vault - see docs/12-troubleshooting.md#unwanted-replacement
+          for the incident that made this necessary.
+        type: boolean
+        required: false
+        default: false
       runner_labels:
         required: false
         type: string
@@ -186,6 +197,99 @@ jobs:
           name: tfplan-${{ inputs.environment }}-${{ github.run_id }}
           path: infra/terraform/plan.txt
           retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # Destroy guard.
+      #
+      # This exists because of a real incident, not as a theoretical control.
+      #
+      # A ForceNew attribute drifted against a value Azure backfilled by itself
+      # (see docs/12-troubleshooting.md#forcenew-null-drift). Every apply then
+      # planned a full replacement of the Synapse workspace. The plan said so,
+      # correctly, every single time - and it was read as noise, because the
+      # surrounding runs were failing on unrelated network errors. The workspace
+      # was destroyed and rebuilt repeatedly over the course of a day before
+      # anyone read the destroy list.
+      #
+      # A plan that quietly deletes a data-bearing resource should not be
+      # applyable by default. Replacements of cheap, stateless things - role
+      # assignments, diagnostic settings, null_resources - stay silent, because
+      # blocking on those would train people to set the override permanently.
+      # -----------------------------------------------------------------------
+      - name: Check plan for destructive changes
+        id: guard
+        working-directory: infra/terraform
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > tfplan.json
+
+          python3 - <<'PY' | tee guard.txt
+          import json, os
+
+          # Things that hold data, or whose rebuild costs a redeploy of content
+          # rather than a few seconds of API calls.
+          PROTECTED = {
+              'azurerm_synapse_workspace',
+              'azurerm_mssql_server',
+              'azurerm_mssql_database',
+              'azurerm_storage_account',
+              'azurerm_storage_data_lake_gen2_filesystem',
+              'azurerm_key_vault',
+              'azurerm_data_factory',
+          }
+
+          plan = json.load(open('tfplan.json'))
+          blocked, other = [], []
+
+          for change in plan.get('resource_changes', []):
+              actions = change.get('change', {}).get('actions', [])
+              if 'delete' not in actions:
+                  continue
+              verb = 'REPLACE' if 'create' in actions else 'DESTROY'
+              entry = f"{verb:8} {change['address']}"
+              (blocked if change.get('type') in PROTECTED else other).append(entry)
+
+          if other:
+              print("Stateless resources being replaced (allowed):")
+              for e in sorted(other):
+                  print(f"  {e}")
+              print()
+
+          if blocked:
+              print("DATA-BEARING RESOURCES WOULD BE DESTROYED:")
+              for e in sorted(blocked):
+                  print(f"  {e}")
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              fh.write(f"blocked={'true' if blocked else 'false'}\n")
+              fh.write(f"count={len(blocked)}\n")
+          PY
+
+      - name: Block apply on unapproved destruction
+        if: steps.guard.outputs.blocked == 'true' && !inputs.allow_destroy
+        working-directory: infra/terraform
+        run: |
+          {
+            echo "## Apply blocked - ${{ inputs.environment }}"
+            echo
+            echo "This plan destroys **${{ steps.guard.outputs.count }}** data-bearing resource(s):"
+            echo
+            echo '```'
+            cat guard.txt
+            echo '```'
+            echo
+            echo "If this is genuinely intended, re-run with **allow_destroy** enabled."
+            echo "If it is not, find the attribute that forced it:"
+            echo
+            echo '```bash'
+            echo "grep -B2 'forces replacement' plan.txt"
+            echo '```'
+            echo
+            echo "See docs/12-troubleshooting.md#unwanted-replacement."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::error::Apply blocked: plan destroys ${{ steps.guard.outputs.count }} data-bearing resource(s). See the job summary."
+          exit 1
 
       - name: terraform apply
         if: inputs.apply && steps.plan.outputs.has_changes == 'true'
