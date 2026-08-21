@@ -235,6 +235,53 @@ data plane is a separate permission surface. You need
 **Cause 3 — network.** The vault has no public endpoint. Apply from inside the
 VNet.
 
+### `AADSTS700213: No matching federated identity record found` {#aadsts700213}
+
+```
+AADSTS700213: No matching federated identity record found for presented
+assertion subject 'repo:jdanton@7385792/edw-ci-cd@1341714815:pull_request'
+```
+
+Look closely at the subject: it contains `@7385792` and `@1341714815`. Those are
+the GitHub **owner ID** and **repository ID**. This is the *immutable* subject
+format, and your federated credential is registered with the legacy name-based
+form.
+
+This is a genuine security improvement rather than churn — a repository name can
+be renamed, transferred, deleted and re-registered by someone else, so a
+name-based credential can in principle be inherited by a different repository.
+Numeric IDs cannot be.
+
+Check which form your repository issues:
+
+```bash
+gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+```
+
+Read `sub_claim_prefix`. Note that `use_immutable_subject: false` does **not**
+reliably mean legacy subjects are issued during the rollout — the prefix field
+is the accurate signal, and the subject in the error message is definitive.
+
+Fix it in `bootstrap/terraform.tfvars`, not the portal, so it survives a
+rebuild:
+
+```bash
+gh api repos/<owner>/<repo> --jq '{owner_id: .owner.id, repo_id: .id}'
+```
+
+```hcl
+use_immutable_subject_claim = true
+github_owner_id             = 7385792
+github_repository_id        = 1341714815
+```
+
+```bash
+cd bootstrap && terraform apply
+```
+
+Subjects update **in place** — no credential is destroyed, so there is no window
+where authentication is broken.
+
 ### `AADSTS70021: No matching federated identity record found`
 
 The OIDC subject does not match any federated credential.

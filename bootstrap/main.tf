@@ -41,7 +41,15 @@ locals {
   # Deployment identities use the `environment:` subject so that GitHub
   # Environment protection rules (required reviewers, wait timers, branch
   # restrictions) are actually load-bearing rather than decorative.
-  repo_slug = "${var.github_owner}/${var.github_repository}"
+  #
+  # The slug itself is either name-based (legacy) or ID-based (immutable) - see
+  # the long comment on var.use_immutable_subject_claim. Every subject below is
+  # built from this local, so switching forms is a one-line change here.
+  repo_slug = var.use_immutable_subject_claim ? format(
+    "%s@%d/%s@%d",
+    var.github_owner, var.github_owner_id,
+    var.github_repository, var.github_repository_id,
+  ) : "${var.github_owner}/${var.github_repository}"
 
   tags = merge(var.tags, {
     "terraform-module" = "bootstrap"
@@ -197,6 +205,16 @@ resource "azuread_application_federated_identity_credential" "deploy_environment
   audiences      = ["api://AzureADTokenExchange"]
   issuer         = "https://token.actions.githubusercontent.com"
   subject        = "repo:${local.repo_slug}:environment:${each.key}"
+
+  # Catches the immutable-subject misconfiguration HERE, with a message that
+  # names the fix - rather than letting format() interpolate a null into every
+  # subject and surfacing hours later as AADSTS700213 in a workflow run.
+  lifecycle {
+    precondition {
+      condition     = !var.use_immutable_subject_claim || (var.github_owner_id != null && var.github_repository_id != null)
+      error_message = "use_immutable_subject_claim = true requires github_owner_id and github_repository_id. Get them with: gh api repos/${var.github_owner}/${var.github_repository} --jq '{owner_id: .owner.id, repo_id: .id}'"
+    }
+  }
 }
 
 # Some maintenance workflows (drift detection, scheduled data quality runs) run
