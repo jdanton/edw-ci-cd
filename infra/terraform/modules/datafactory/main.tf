@@ -61,15 +61,15 @@ locals {
         description        = "Copy sink and Stored Procedure activity against the serving database."
       }
     },
-    var.key_vault_id == null ? {} : {
+    var.enable_key_vault_endpoint ? {
       "keyvault" = {
         target_resource_id = var.key_vault_id
         subresource_name   = "vault"
         fqdns              = []
         description        = "LS_KeyVault resolves secrets at pipeline runtime."
       }
-    },
-    var.synapse_workspace_id == null ? {} : {
+    } : {},
+    var.enable_synapse_endpoints ? {
       "synapse-sqlondemand" = {
         target_resource_id = var.synapse_workspace_id
         subresource_name   = "SqlOnDemand"
@@ -82,7 +82,7 @@ locals {
         fqdns              = []
         description        = "Synapse Notebook / pipeline activities, if you add them later."
       }
-    },
+    } : {},
   )
 
   managed_private_endpoints = merge(local.default_managed_private_endpoints, var.additional_managed_private_endpoints)
@@ -255,7 +255,7 @@ resource "azurerm_private_endpoint" "factory" {
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_diagnostic_setting" "this" {
-  count = var.log_analytics_workspace_id == null ? 0 : 1
+  count = var.enable_diagnostics ? 1 : 0
 
   name                       = "diag"
   target_resource_id         = azurerm_data_factory.this.id

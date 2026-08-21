@@ -161,3 +161,28 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "enable_auditing" {
+  description = "Enable extended auditing to audit_storage_endpoint. Boolean rather than an is-the-endpoint-null test, for the plan-time reason in enable_diagnostics."
+  type        = bool
+  default     = true
+}
+
+variable "enable_diagnostics" {
+  description = <<-EOT
+    Create the diagnostic setting for this resource.
+
+    A BOOLEAN, not a `log_analytics_workspace_id != null` test - `count` must be
+    resolvable at PLAN time, and the workspace ID is a resource attribute that
+    does not exist until apply. Deriving count from it fails on a fresh state:
+
+        Error: Invalid count argument
+        The "count" value depends on resource attributes that cannot be
+        determined until apply, so Terraform cannot predict how many instances
+        will be created.
+
+    The ID itself may be unknown; only the PREDICATE has to be known.
+  EOT
+  type        = bool
+  default     = true
+}

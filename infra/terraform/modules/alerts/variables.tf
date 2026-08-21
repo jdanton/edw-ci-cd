@@ -74,3 +74,30 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+# ---------------------------------------------------------------------------
+# Which alert families to create.
+#
+# Booleans rather than `<id> != null` tests: `count` must be resolvable at PLAN
+# time, and every one of those IDs is a resource attribute that does not exist
+# until apply. See modules/storage/variables.tf enable_diagnostics for the full
+# explanation and the exact error.
+# ---------------------------------------------------------------------------
+
+variable "enable_data_factory_alerts" {
+  description = "Pipeline-failed and pipeline-overrunning alerts."
+  type        = bool
+  default     = true
+}
+
+variable "enable_synapse_alerts" {
+  description = "Serverless bytes-processed spend alert."
+  type        = bool
+  default     = true
+}
+
+variable "enable_sql_alerts" {
+  description = "Azure SQL CPU and storage alerts."
+  type        = bool
+  default     = true
+}

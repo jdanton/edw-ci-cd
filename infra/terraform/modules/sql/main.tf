@@ -159,7 +159,7 @@ resource "azurerm_private_endpoint" "sql" {
 # ---------------------------------------------------------------------------
 
 resource "azurerm_mssql_server_extended_auditing_policy" "this" {
-  count = var.audit_storage_endpoint == null ? 0 : 1
+  count = var.enable_auditing ? 1 : 0
 
   server_id                               = azurerm_mssql_server.this.id
   storage_endpoint                        = var.audit_storage_endpoint
@@ -190,7 +190,7 @@ resource "azurerm_mssql_server_security_alert_policy" "this" {
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_diagnostic_setting" "database" {
-  count = var.log_analytics_workspace_id == null ? 0 : 1
+  count = var.enable_diagnostics ? 1 : 0
 
   name                       = "diag"
   target_resource_id         = azurerm_mssql_database.this.id

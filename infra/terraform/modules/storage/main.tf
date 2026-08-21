@@ -304,7 +304,7 @@ resource "azurerm_storage_management_policy" "this" {
 # ---------------------------------------------------------------------------
 
 resource "azurerm_monitor_diagnostic_setting" "blob" {
-  count = var.log_analytics_workspace_id == null ? 0 : 1
+  count = var.enable_diagnostics ? 1 : 0
 
   name                       = "diag-blob"
   target_resource_id         = "${azurerm_storage_account.this.id}/blobServices/default"
@@ -323,7 +323,7 @@ resource "azurerm_monitor_diagnostic_setting" "blob" {
 }
 
 resource "azurerm_monitor_diagnostic_setting" "account" {
-  count = var.log_analytics_workspace_id == null ? 0 : 1
+  count = var.enable_diagnostics ? 1 : 0
 
   name                       = "diag-account"
   target_resource_id         = azurerm_storage_account.this.id
