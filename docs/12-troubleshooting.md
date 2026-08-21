@@ -484,6 +484,46 @@ For a specific comparison:
 WHERE Borough COLLATE Latin1_General_100_CI_AS = 'manhattan'
 ```
 
+### Synapse workspace ends in `Failed`, apply reports a cancelled context {#synapse-create-timeout}
+
+```
+Error: waiting for creation of Workspace: Future#WaitForCompletion:
+context has been cancelled: StatusCode=200 -- Original Error: context deadline exceeded
+```
+
+Read `StatusCode=200`. **Azure was still working and perfectly happy.** The
+cancellation is Terraform's own deadline - the provider default for creating a
+Synapse workspace is 30 minutes, and a managed-VNet workspace in a cold region
+routinely exceeds it.
+
+What makes this expensive to diagnose is the aftermath. Terraform abandons the
+operation, the half-provisioned workspace settles into
+`provisioningState = Failed`, and the next apply finds a Failed workspace. So
+the symptom presents as a broken configuration rather than a timeout, and the
+next error you get is the thoroughly uninformative
+
+```
+CreateWorkspaceError: An error has occured while creating the workspace.
+Correlation Id: ...
+```
+
+which carries no detail at all, in the portal or the activity log.
+
+`modules/synapse` now allows 90 minutes, and `_terraform-apply.yml` allows 150
+for the job - the job timeout must exceed the longest resource timeout, or a
+slow-but-succeeding apply gets cancelled instead, which is worse: Terraform
+does not get to write state for what it created.
+
+**A `Failed` workspace cannot be repaired.** Delete it and let Terraform
+recreate:
+
+```bash
+az synapse workspace delete -n <workspace> -g <rg> --yes
+```
+
+Do not simply re-run the apply against it - Terraform will attempt an update,
+which also fails, and you lose another 30 minutes.
+
 ### `azure.synapse.tools` hangs
 
 The Dev endpoint is private. Check

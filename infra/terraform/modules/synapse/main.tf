@@ -142,6 +142,33 @@ resource "azurerm_synapse_workspace" "this" {
   # Purview integration and CMK are deliberately out of scope for the template.
 
   tags = var.tags
+
+  # ---------------------------------------------------------------------
+  # 30 MINUTES IS NOT ENOUGH, AND THE FAILURE LOOKS LIKE SOMETHING ELSE.
+  #
+  # The provider default for create is 30m. A managed-VNet workspace in a cold
+  # region routinely exceeds it, and when it does you get:
+  #
+  #   Error: waiting for creation of Workspace: Future#WaitForCompletion:
+  #   context has been cancelled: StatusCode=200 -- Original Error: context
+  #   deadline exceeded
+  #
+  # Read StatusCode=200: AZURE WAS STILL WORKING AND HAPPY. The cancellation is
+  # Terraform's own deadline, not an Azure error. But the workspace is then left
+  # mid-provision and settles into provisioningState = Failed, so the next
+  # apply finds a Failed workspace and the whole thing looks like a broken
+  # configuration rather than a timeout.
+  #
+  # That misreading cost several 30-minute cycles here. Ninety minutes is
+  # generous rather than tuned - the cost of being wrong in this direction is
+  # only waiting, while the cost of being wrong the other way is a Failed
+  # workspace that must be deleted by hand before anything can proceed.
+  # ---------------------------------------------------------------------
+  timeouts {
+    create = "90m"
+    update = "60m"
+    delete = "60m"
+  }
 }
 
 # ---------------------------------------------------------------------------

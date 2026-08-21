@@ -56,7 +56,11 @@ jobs:
   terraform:
     name: ${{ inputs.environment }}
     runs-on: ${{ fromJSON(inputs.runner_labels) }}
-    timeout-minutes: 90
+    # Must exceed the longest RESOURCE timeout in the configuration - the
+    # Synapse workspace allows 90m for create. A job timeout below that turns a
+    # slow-but-succeeding apply into a cancelled one, which is strictly worse:
+    # Terraform does not get to write state for what it created.
+    timeout-minutes: 150
 
     # Protection rules on this GitHub Environment - required reviewers, wait
     # timers, branch restrictions - are enforced BEFORE the job starts and
