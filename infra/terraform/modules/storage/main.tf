@@ -57,6 +57,10 @@ resource "azurerm_storage_account" "this" {
   allow_nested_items_to_be_public = false
   default_to_oauth_authentication = true
 
+  # NOT false. Read the note on var.public_network_access_enabled - "Disabled"
+  # switches off the network rule set entirely, trusted-services bypass
+  # included, and Synapse workspace creation then fails against its own default
+  # filesystem with a generic CreateWorkspaceError.
   public_network_access_enabled = var.public_network_access_enabled
 
   min_tls_version                   = "TLS1_2"

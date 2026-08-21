@@ -127,10 +127,22 @@ jobs:
   test:
     name: Deploy to test
     needs: [dev]
+    # `skipped` is accepted ONLY when the operator explicitly targeted this
+    # environment alone. Accepting it unconditionally is what let prod deploy
+    # after dev FAILED: dev failed -> test skipped -> prod saw "skipped" and
+    # ran. 45 resources were created in production off a broken commit.
+    #
+    # Push and "all" therefore require the previous stage to have SUCCEEDED;
+    # a single-environment dispatch requires the earlier stages to have been
+    # skipped, which only happens when they were never selected.
     if: |
       always() &&
-      (needs.dev.result == 'success' || needs.dev.result == 'skipped') &&
-      (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'test')
+      (
+        ((github.event_name == 'push' || inputs.environment == 'all') &&
+          needs.dev.result == 'success')
+        ||
+        (inputs.environment == 'test' && needs.dev.result == 'skipped')
+      )
     uses: ./.github/workflows/_synapse-deploy.yml
     with:
       environment: test
@@ -140,11 +152,24 @@ jobs:
 
   prod:
     name: Deploy to prod
-    needs: [test]
+    needs: [dev, test]
+    # `skipped` is accepted ONLY when the operator explicitly targeted this
+    # environment alone. Accepting it unconditionally is what let prod deploy
+    # after dev FAILED: dev failed -> test skipped -> prod saw "skipped" and
+    # ran. 45 resources were created in production off a broken commit.
+    #
+    # Push and "all" therefore require the previous stage to have SUCCEEDED;
+    # a single-environment dispatch requires the earlier stages to have been
+    # skipped, which only happens when they were never selected.
     if: |
       always() &&
-      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
-      (github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'prod')
+      (
+        ((github.event_name == 'push' || inputs.environment == 'all') &&
+          needs.dev.result == 'success' && needs.test.result == 'success')
+        ||
+        (inputs.environment == 'prod' &&
+          needs.dev.result == 'skipped' && needs.test.result == 'skipped')
+      )
     uses: ./.github/workflows/_synapse-deploy.yml
     with:
       environment: prod

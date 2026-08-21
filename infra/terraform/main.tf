@@ -209,8 +209,11 @@ module "storage" {
   replication_type = var.storage_replication_type
   filesystems      = local.filesystems
 
-  create_data_lake_directories  = var.create_data_lake_directories
-  public_network_access_enabled = false
+  create_data_lake_directories = var.create_data_lake_directories
+
+  # true + deny-all, not false. See the note on the module variable: false
+  # disables the rule set entirely and blocks Synapse workspace creation.
+  public_network_access_enabled = true
 
   private_endpoint_subnet_id = module.network.private_endpoint_subnet_id
   private_dns_zone_ids       = module.network.private_dns_zone_ids

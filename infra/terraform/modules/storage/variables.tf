@@ -82,9 +82,42 @@ variable "create_data_lake_directories" {
 }
 
 variable "public_network_access_enabled" {
-  description = "Leave false. Set true only for a short-lived break-glass window, and revert."
+  description = <<-EOT
+    Whether the storage account exposes a public ENDPOINT. This is not the same
+    question as "is the account reachable from the internet", and conflating
+    them broke Synapse.
+
+    true  + network_rules.default_action = "Deny" + no ip_rules   <-- default
+          The public endpoint exists but denies everything by default. Traffic
+          arrives via private endpoints, and the `bypass` list still applies -
+          so trusted Azure services can reach the account.
+
+    false
+          The public endpoint is switched OFF, and Azure then IGNORES THE ENTIRE
+          NETWORK RULE SET, bypass included. Nothing that is not a private
+          endpoint gets in, whatever the rules say.
+
+    Why that matters here: creating a Synapse workspace requires the Synapse
+    control plane to reach the workspace's default ADLS filesystem, and it does
+    so as a trusted service over the public endpoint - there is no managed
+    private endpoint yet, because the workspace it would belong to does not
+    exist. With `false` the workspace sits at "creating" for 30 minutes and then
+    fails with a message that names neither storage nor networking:
+
+        CreateWorkspaceError: An error has occured while creating the workspace.
+
+    The same applies to Azure SQL extended auditing, which reaches the account
+    the same way.
+
+    So the default is `true` WITH a deny-all rule set. The account is still not
+    reachable from the internet - no IP is permitted - but Azure's own services
+    can do the jobs this platform asks of them.
+
+    Set false only if you accept losing trusted-service access, and are willing
+    to create the Synapse workspace against a different storage account.
+  EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "private_endpoint_subnet_id" {
