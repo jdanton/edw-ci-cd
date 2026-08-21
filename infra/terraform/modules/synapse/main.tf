@@ -180,10 +180,35 @@ resource "azurerm_synapse_workspace" "this" {
   # workspace that must be deleted by hand before anything can proceed.
   # ---------------------------------------------------------------------
   lifecycle {
-    # The workspace is created with public access enabled and disabled straight
-    # afterwards, so Azure will always report Disabled while this configuration
-    # says true. Without this, every plan proposes turning it back on.
-    ignore_changes = [public_network_access_enabled]
+    ignore_changes = [
+      # Created with public access enabled and disabled straight afterwards, so
+      # Azure always reports Disabled while this configuration says true.
+      # Without this, every plan proposes turning it back on.
+      public_network_access_enabled,
+
+      # THE ONE THAT DESTROYED THIS WORKSPACE ON EVERY APPLY.
+      #
+      # With azuread_authentication_only = true we deliberately pass no SQL
+      # administrator - there is no password anywhere in this platform. But
+      # Azure does not store "none": it assigns a default, "sqladminuser".
+      #
+      # So state holds "sqladminuser", configuration holds null, and
+      # sql_administrator_login is ForceNew. Every plan therefore read:
+      #
+      #   - sql_administrator_login = "sqladminuser" -> null # forces replacement
+      #
+      # and every apply destroyed and recreated the workspace - taking its
+      # managed private endpoints, diagnostic settings, role assignments and
+      # every ADF endpoint pointing at it along for the ride. Plan: 17 to add,
+      # 3 to change, 10 to destroy, on a configuration nobody had changed.
+      #
+      # The login is inert: azuread_authentication_only = true means SQL
+      # authentication is refused outright, so what Azure recorded in that field
+      # can never be used to connect. Ignoring it is safe, and is the only way
+      # to express "we did not set this" to a provider whose API has no way to
+      # represent it.
+      sql_administrator_login,
+    ]
   }
 
   timeouts {
