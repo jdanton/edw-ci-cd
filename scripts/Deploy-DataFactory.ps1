@@ -357,6 +357,7 @@ Write-Step 'Verifying trigger state.'
 
 $triggerState = @()
 $notRunning   = @()
+$mismatches   = @()
 try {
     $liveTriggers = Get-AzDataFactoryV2Trigger -ResourceGroupName $resourceGroupName `
         -DataFactoryName $dataFactoryName -ErrorAction Stop
@@ -370,9 +371,14 @@ try {
             Ok   = ($expected -eq $actual)
         }
 
-        if ($expected -eq 'Started' -and $actual -ne 'Started') {
-            $notRunning += $trigger.Name
-            Write-Warn "$($trigger.Name) should be Started but is $actual"
+        if ($expected -ne $actual) {
+            $mismatches += $trigger.Name
+
+            if ($expected -eq 'Started') {
+                $notRunning += $trigger.Name
+            }
+
+            Write-Warn "$($trigger.Name) should be $expected but is $actual"
         }
         else {
             Write-Ok "$($trigger.Name): $actual"
@@ -428,6 +434,10 @@ $(if ($notRunning.Count -gt 0) {
 > does not leave ingestion silently switched off.
 "@
     $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+}
+
+if ($mismatches.Count -gt 0) {
+    throw "Trigger verification failed for $($mismatches.Count) trigger(s). See summary for mismatches."
 }
 
 Write-Step 'Data Factory deployment complete.'
