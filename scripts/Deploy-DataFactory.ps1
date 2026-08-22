@@ -224,11 +224,54 @@ if (-not $PSCmdlet.ShouldProcess($dataFactoryName, 'Publish ADF artifacts')) {
 # row. Captured BEFORE publishing because it is also what we restore from if
 # the publish dies half way through.
 # ---------------------------------------------------------------------------
-$shouldBeStarted = @(
+$declaredStarted = @(
     Import-Csv $configPath |
         Where-Object { $_.type -eq 'trigger' -and $_.path -eq 'runtimeState' -and $_.value -eq 'Started' } |
         ForEach-Object { $_.name }
 )
+
+function Expand-DeclaredTriggerName {
+    param(
+        [string[]] $Names,
+        [string[]] $Candidates
+    )
+
+    $expanded = foreach ($name in $Names) {
+        if ([System.Management.Automation.WildcardPattern]::ContainsWildcardCharacters($name)) {
+            $Candidates | Where-Object { $_ -like $name }
+        }
+        else {
+            $name
+        }
+    }
+
+    return @($expanded | Sort-Object -Unique)
+}
+
+$sourceTriggerNames = @(
+    Get-ChildItem -Path (Join-Path $adfRoot 'trigger') -Filter *.json -File -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.BaseName }
+)
+
+$liveTriggerNames = @()
+try {
+    $liveTriggerNames = @(
+        Get-AzDataFactoryV2Trigger -ResourceGroupName $resourceGroupName `
+            -DataFactoryName $dataFactoryName -ErrorAction Stop |
+            ForEach-Object { $_.Name }
+    )
+}
+catch {
+    Write-Warn "Could not read live triggers for wildcard expansion: $($_.Exception.Message)"
+}
+
+$triggerNameCandidates = @(
+    @($sourceTriggerNames + $liveTriggerNames) |
+        Where-Object { $_ } |
+        Sort-Object -Unique
+)
+
+$shouldBeStarted = Expand-DeclaredTriggerName -Names $declaredStarted -Candidates $triggerNameCandidates
 
 function Start-DeclaredTrigger {
     <#
