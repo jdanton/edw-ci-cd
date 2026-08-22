@@ -8,15 +8,12 @@
 #
 # WHY THIS RUNS ON A SELF-HOSTED RUNNER
 # -------------------------------------
-# `terraform plan` is not purely a control-plane operation in this
-# configuration. Refreshing azurerm_storage_data_lake_gen2_filesystem and
-# azurerm_storage_data_lake_gen2_path calls the ADLS DATA plane, which has no
-# public endpoint. On a GitHub-hosted runner those refreshes hang and then
-# fail with a timeout that says nothing about networking.
+# `terraform plan` now runs with `-refresh=false`, so this workflow no longer
+# depends on plan-time reads from private Azure data planes.
 #
-# The jobs that genuinely need no Azure access at all (linting, the DACPAC
-# build) are separated out so they still give fast feedback if the runner pool
-# is busy.
+# The self-hosted runner requirement remains for the jobs that still need
+# private network reachability (for example Terraform backend access and the
+# platform connectivity checks).
 # =============================================================================
 
 name: PR validation
@@ -246,7 +243,43 @@ jobs:
         working-directory: infra/terraform
         run: |
           set -euo pipefail
-          terraform plan -no-color -lock=false -input=false \
+          # ---------------------------------------------------------------
+          # -refresh=false is REQUIRED here, not an optimisation.
+          #
+          # A refreshing plan is not a control-plane operation in this
+          # configuration. To refresh state it must READ:
+          #
+          #   azurerm_key_vault_secret                -> Key Vault data plane
+          #   azurerm_storage_data_lake_gen2_path     -> ADLS data plane
+          #   azurerm_synapse_managed_private_endpoint-> Synapse Dev API
+          #
+          # This job authenticates as the read-only CI identity, which holds
+          # Reader on the subscription and deliberately NOTHING on any data
+          # plane - see the comment in bootstrap/main.tf next to ci_reader:
+          # plan-time secret reads are a data-exfiltration vector on PRs.
+          #
+          # Those two facts are in direct conflict. With refresh on, every
+          # PR plan fails once the environment is actually built:
+          #
+          #   Error: making Read request on Azure KeyVault Secret
+          #   lake-dfs-endpoint: ... 403 ... ForbiddenByRbac
+          #   Error: retrieving Path "nyctlc/yellow" ... 403
+          #   Error: retrieving Managed Private Endpoint "mpe-lake-dfs" ... 403
+          #
+          # It passed for months only because dev did not exist yet - an
+          # empty state has nothing to refresh.
+          #
+          # Refreshing is not this job's purpose. A PR gate answers "does
+          # this CHANGE break the configuration", which is a comparison of
+          # config against recorded state. Detecting reality drifting away
+          # from state is a different question, and drift-detect.yml already
+          # answers it every weekday morning using the DEPLOY identity, which
+          # does have the necessary access.
+          #
+          # So: keep the CI identity genuinely read-only, and let the
+          # scheduled job be the one that touches data planes.
+          # ---------------------------------------------------------------
+          terraform plan -no-color -lock=false -input=false -refresh=false \
             -var-file=envs/dev/dev.tfvars \
             -out=tfplan 2>&1 | tee plan.txt
           terraform show -no-color tfplan > plan-full.txt
@@ -268,6 +301,12 @@ jobs:
 
           Add-Content $env:GITHUB_STEP_SUMMARY @"
           ## Terraform plan - dev
+
+          > Planned with ``-refresh=false``, against recorded state rather than
+          > live Azure. This job runs as the read-only CI identity, which has no
+          > data-plane access by design. **It therefore shows what this CHANGE
+          > would do, and cannot show drift** - ``drift-detect.yml`` covers that
+          > every weekday with the deploy identity.
 
           <details><summary>Show plan</summary>
 

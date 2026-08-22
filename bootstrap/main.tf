@@ -454,3 +454,18 @@ resource "azurerm_role_assignment" "ci_state_blob" {
 
 # Key Vault secret read for the CI identity is deliberately NOT granted.
 # Plan-time secret reads are a data-exfiltration vector on fork PRs.
+#
+# The same reasoning withholds Storage Blob Data Reader and any Synapse RBAC
+# role: all three are data planes holding either secrets or the lake itself.
+#
+# CONSEQUENCE, and it is not optional: `terraform plan` CANNOT REFRESH as this
+# identity. Refreshing reads azurerm_key_vault_secret, the ADLS paths and the
+# Synapse managed private endpoints, and every one of those returns 403. So
+# pr-validate.yml plans with -refresh=false, and the long comment on that flag
+# explains why. If you grant any of these roles to make a refreshing plan work,
+# you have quietly handed every pull request read access to the lake and the
+# vault - which is the exact thing this omission exists to prevent.
+#
+# Drift detection is not lost by that trade: drift-detect.yml runs a full
+# refreshing plan every weekday as the DEPLOY identity, which legitimately has
+# the access.
