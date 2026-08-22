@@ -8,15 +8,12 @@
 #
 # WHY THIS RUNS ON A SELF-HOSTED RUNNER
 # -------------------------------------
-# `terraform plan` is not purely a control-plane operation in this
-# configuration. Refreshing azurerm_storage_data_lake_gen2_filesystem and
-# azurerm_storage_data_lake_gen2_path calls the ADLS DATA plane, which has no
-# public endpoint. On a GitHub-hosted runner those refreshes hang and then
-# fail with a timeout that says nothing about networking.
+# `terraform plan` now runs with `-refresh=false`, so this workflow no longer
+# depends on plan-time reads from private Azure data planes.
 #
-# The jobs that genuinely need no Azure access at all (linting, the DACPAC
-# build) are separated out so they still give fast feedback if the runner pool
-# is busy.
+# The self-hosted runner requirement remains for the jobs that still need
+# private network reachability (for example Terraform backend access and the
+# platform connectivity checks).
 # =============================================================================
 
 name: PR validation
