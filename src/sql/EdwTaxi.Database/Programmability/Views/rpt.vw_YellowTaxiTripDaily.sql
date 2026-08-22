@@ -52,7 +52,7 @@ SELECT
        SUM ignores NULLs, so a day before 2019 reports 0.00 rather than NULL.
        That is the conventional reading for a charge that did not exist, and
        it keeps the column addable without changing any existing number. */
-    TotalCongestionSurcharge = SUM(f.CongestionSurchargeAmount),
+    TotalCongestionSurcharge = COALESCE(SUM(f.CongestionSurchargeAmount), 0),
 
     /* Tips are only metered on card payments. Summing TipAmount across all
        payment types produces a number that is correct and meaningless. */
