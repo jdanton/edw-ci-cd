@@ -301,7 +301,7 @@ Those two workflows install the modules on demand. Pre-installing skips ~60s per
 run:
 
 ```bash
-pwsh -c "Install-Module Az.Accounts, Az.DataFactory, Az.Synapse -Scope AllUsers -Force"
+pwsh -c "Install-Module Az.Accounts, Az.Resources, Az.DataFactory, Az.Synapse -Scope AllUsers -Force"
 ```
 
 The workflows *do* install `sqlpackage`, `SqlServer`, `azure.datafactory.tools`

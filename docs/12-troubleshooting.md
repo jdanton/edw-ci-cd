@@ -647,6 +647,40 @@ half-configured state.
 
 ## Data Factory
 
+### `The term 'New-AzResource' is not recognized` {#new-azresource-missing}
+
+```
+STEP: Deployment of all ADF objects...
+Start deploying object: [linkedService].[LS_ADLS_Lake] (1 dependency/ies)
+Deploy-AdfObjectOnly: .../azure.datafactory.tools/1.11.0/private/Deploy-AdfObject.ps1:43
+     | The term 'New-AzResource' is not recognized as a name of a cmdlet ...
+```
+
+Nothing to do with Data Factory, and nothing to do with the network.
+`New-AzResource` lives in **Az.Resources**, which is not installed. The module
+publishes with `Method = 'AzResource'` by default, so every artifact goes
+through that one cmdlet — and it declares no `RequiredModules`, so nothing
+warns you at import time. `azure/login`'s `enable-AzPSSession` only guarantees
+`Az.Accounts`.
+
+The failure lands *after* `STEP: Stopping triggers...`, so the factory is left
+with its triggers stopped. Check them once the deployment succeeds:
+
+```bash
+az datafactory trigger list -g <rg> --factory-name <adf> \
+  --query "[].{name:name, state:properties.runtimeState}" -o table
+```
+
+```powershell
+Install-Module Az.Resources -Scope CurrentUser -Force
+```
+
+The same cmdlet is on `azure.synapse.tools`' publish path, so a Synapse
+deployment fails identically. Both `Deploy-DataFactory.ps1` and
+`Deploy-Synapse.ps1` now install the module if it is absent, and the workflows
+pre-install it; this entry is for when you are running from a jumpbox with an
+older checkout.
+
 ### `apply` hangs forever creating a managed private endpoint {#mpe-create-hangs}
 
 ```

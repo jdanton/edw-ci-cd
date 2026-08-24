@@ -89,11 +89,15 @@ jobs:
       #   Cannot bind argument to parameter 'Name' because it is null.
       #
       # Pre-install them on the runner to skip this step's ~60s.
+      #
+      # Az.Resources belongs here for the same reason it does in adf-cd.yml:
+      # azure.synapse.tools' Deploy-SynapseObjectOnly calls New-AzResource, so
+      # without it the publish fails on the first artifact.
       - name: Ensure Az PowerShell modules
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($m in @('Az.Accounts','Az.Synapse')) {
+          foreach ($m in @('Az.Accounts','Az.Resources','Az.Synapse')) {
             $found = Get-Module -ListAvailable -Name $m | Select-Object -First 1
             if ($found) {
               Write-Host "$m $($found.Version) already present"

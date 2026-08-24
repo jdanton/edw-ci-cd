@@ -74,6 +74,27 @@ if (-not (Get-Module -ListAvailable -Name azure.datafactory.tools |
 Import-Module azure.datafactory.tools -RequiredVersion $ModuleVersion -Force
 Write-Ok "Module loaded: $((Get-Module azure.datafactory.tools).Version)"
 
+# The Az modules the publish path actually reaches for. azure.datafactory.tools
+# declares no RequiredModules, so a missing one surfaces as a bare "The term
+# 'X' is not recognized" from inside the module, mid-deployment, with the
+# triggers already stopped:
+#
+#   Az.Resources   New-AzResource. The default publish Method is 'AzResource',
+#                  so every artifact goes through it.
+#   Az.DataFactory Get-/Remove-AzDataFactoryV2*, used to read the live factory
+#                  for deleteNotInSource and to stop and start triggers.
+#   Az.Accounts    the authenticated context both of the above run in.
+#
+# Az.Storage is NOT needed: the module only touches it for incremental
+# deployment state, which this template does not enable.
+foreach ($module in @('Az.Accounts', 'Az.Resources', 'Az.DataFactory')) {
+    if (-not (Get-Module -ListAvailable -Name $module)) {
+        Write-Step "Installing $module (required by azure.datafactory.tools)."
+        Install-Module -Name $module -Scope CurrentUser -Force -AllowClobber
+    }
+}
+Write-Ok 'Az modules present: Az.Accounts, Az.Resources, Az.DataFactory'
+
 # ---------------------------------------------------------------------------
 # 2. Target, from Terraform
 # ---------------------------------------------------------------------------

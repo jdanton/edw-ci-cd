@@ -183,11 +183,18 @@ jobs:
       #   Cannot bind argument to parameter 'Name' because it is null.
       #
       # Pre-install them on the runner to skip this step's ~60s.
+      #
+      # Az.Resources is not optional either, and nothing above hints at it:
+      # azure.datafactory.tools publishes with Method 'AzResource' by default,
+      # and its Deploy-AdfObjectOnly calls New-AzResource. Without the module
+      # the run gets all the way to the first linked service before dying on
+      # "The term 'New-AzResource' is not recognized" - after the triggers have
+      # already been stopped.
       - name: Ensure Az PowerShell modules
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($m in @('Az.Accounts','Az.DataFactory')) {
+          foreach ($m in @('Az.Accounts','Az.Resources','Az.DataFactory')) {
             $found = Get-Module -ListAvailable -Name $m | Select-Object -First 1
             if ($found) {
               Write-Host "$m $($found.Version) already present"
@@ -270,11 +277,18 @@ jobs:
       #   Cannot bind argument to parameter 'Name' because it is null.
       #
       # Pre-install them on the runner to skip this step's ~60s.
+      #
+      # Az.Resources is not optional either, and nothing above hints at it:
+      # azure.datafactory.tools publishes with Method 'AzResource' by default,
+      # and its Deploy-AdfObjectOnly calls New-AzResource. Without the module
+      # the run gets all the way to the first linked service before dying on
+      # "The term 'New-AzResource' is not recognized" - after the triggers have
+      # already been stopped.
       - name: Ensure Az PowerShell modules
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($m in @('Az.Accounts','Az.DataFactory')) {
+          foreach ($m in @('Az.Accounts','Az.Resources','Az.DataFactory')) {
             $found = Get-Module -ListAvailable -Name $m | Select-Object -First 1
             if ($found) {
               Write-Host "$m $($found.Version) already present"
@@ -353,11 +367,18 @@ jobs:
       #   Cannot bind argument to parameter 'Name' because it is null.
       #
       # Pre-install them on the runner to skip this step's ~60s.
+      #
+      # Az.Resources is not optional either, and nothing above hints at it:
+      # azure.datafactory.tools publishes with Method 'AzResource' by default,
+      # and its Deploy-AdfObjectOnly calls New-AzResource. Without the module
+      # the run gets all the way to the first linked service before dying on
+      # "The term 'New-AzResource' is not recognized" - after the triggers have
+      # already been stopped.
       - name: Ensure Az PowerShell modules
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($m in @('Az.Accounts','Az.DataFactory')) {
+          foreach ($m in @('Az.Accounts','Az.Resources','Az.DataFactory')) {
             $found = Get-Module -ListAvailable -Name $m | Select-Object -First 1
             if ($found) {
               Write-Host "$m $($found.Version) already present"
