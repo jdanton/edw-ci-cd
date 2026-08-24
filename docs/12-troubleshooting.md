@@ -632,6 +632,35 @@ az synapse workspace delete -n <workspace> -g <rg> --yes
 Do not simply re-run the apply against it - Terraform will attempt an update,
 which also fails, and you lose another 30 minutes.
 
+### `ResourceNotDeletable` on `WorkspaceDefaultSqlServer` {#workspace-default-linked-services}
+
+```
+Removing object: [LinkedService].[syn-edwtaxi-dev-65ri-WorkspaceDefaultSqlServer]
+     | The linked service syn-edwtaxi-dev-65ri-WorkspaceDefaultSqlServer is managed
+     | by the workspace syn-edwtaxi-dev-65ri and cannot be deleted.
+     | Status: 400 ErrorCode: ResourceNotDeletable
+```
+
+`deleteNotInSource: true` converges the workspace on the repository, and Azure
+creates two linked services with every workspace that are not, and never will
+be, in `src/synapse/workspace`:
+
+| | |
+|---|---|
+| `<workspace>-WorkspaceDefaultSqlServer` | the built-in serverless endpoint |
+| `<workspace>-WorkspaceDefaultStorage` | the workspace's primary ADLS filesystem |
+
+Both are workspace-managed and the API refuses to delete them, so the publish
+fails at the delete step — after the artifacts have already been deployed.
+
+`publish-options.json` excludes `linkedService.*-WorkspaceDefault*`. A pattern
+rather than two names because the names carry the workspace prefix, which
+differs per environment. `DoNotDeleteExcludedObjects` defaults to true, so an
+excluded object is skipped rather than attempted.
+
+Do not fix this by turning off `deleteNotInSource` — that also stops artifacts
+deleted in a PR from ever leaving the workspace.
+
 ### `IDX12741: JWT must have three segments` deploying a sqlscript {#idx12741}
 
 ```
