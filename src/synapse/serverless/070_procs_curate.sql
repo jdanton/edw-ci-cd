@@ -263,7 +263,21 @@ WHERE q.DuplicateRank = 1;';
             RETURN;
         END
 
-        THROW;
+        /* Serverless SQL has no THROW - the parser rejects it outright with
+           "Incorrect syntax near 'THROW'", which then cascades into a second
+           error on the END that closes this block, so the reported line is not
+           the offending one. Re-raise with RAISERROR instead.
+
+           The original text goes in as an ARGUMENT, not as the format string:
+           a message containing a '%' - a LIKE pattern, or a percentage in a
+           column name - would otherwise be read as a format specifier and
+           either mangle the message or fail the RAISERROR itself.
+
+           RETURN is not optional. THROW aborted the batch; RAISERROR does not,
+           so without it execution falls through to the success PRINT below and
+           a failed build reports that it built. */
+        RAISERROR(N'%s', 16, 1, @msg);
+        RETURN;
     END CATCH
 
     PRINT CONCAT('Built curated.', @tableName, ' at curated/', @location);
