@@ -51,6 +51,18 @@ on:
         default: ''
         type: string
 
+      synapse_rbac_principal:
+        description: 'Object ID to grant Synapse Administrator (blank = skip). Use the admin group to fix Studio 403s for humans.'
+        required: false
+        default: ''
+        type: string
+
+      skip_sql_login:
+        description: 'Only do the Synapse RBAC work, do not touch SQL'
+        required: false
+        default: false
+        type: boolean
+
 permissions:
   id-token: write
   contents: read
@@ -109,7 +121,36 @@ jobs:
           Write-Host "Principal: $name"
           "name=$name" >> $env:GITHUB_OUTPUT
 
+      # Synapse RBAC is a THIRD permission system, separate from Azure RBAC and
+      # from the workspace's Entra SQL admin. Studio artifact reads are governed
+      # by it, so a subscription Owner who is in the admin group still sees
+      # "Failed to load one or more resources due to no access, error code 403"
+      # until they hold a Synapse role. The workspace creator gets Synapse
+      # Administrator implicitly - here that is this deployment identity, which
+      # is why CI can publish artifacts while humans cannot open Studio.
+      - name: Synapse RBAC assignments (as the deployment identity)
+        shell: pwsh
+        run: |
+          az synapse role assignment list `
+            --workspace-name (terraform -chdir=infra/terraform output -raw synapse_workspace_name) `
+            --output table
+        continue-on-error: true
+
+      - name: Grant Synapse Administrator
+        if: inputs.synapse_rbac_principal != ''
+        shell: pwsh
+        run: |
+          $ws = terraform -chdir=infra/terraform output -raw synapse_workspace_name
+          az synapse role assignment create `
+            --workspace-name $ws `
+            --role 'Synapse Administrator' `
+            --assignee-object-id '${{ inputs.synapse_rbac_principal }}' `
+            --assignee-principal-type Group `
+            --output table
+          Write-Host '::notice::Granted Synapse Administrator. Studio access for group members follows within a minute or two.'
+
       - name: Grant the login
+        if: ${{ !inputs.skip_sql_login }}
         shell: pwsh
         run: |
           ./scripts/Grant-ServerlessLogin.ps1 `
