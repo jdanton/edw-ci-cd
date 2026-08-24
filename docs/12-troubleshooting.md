@@ -632,6 +632,37 @@ az synapse workspace delete -n <workspace> -g <rg> --yes
 Do not simply re-run the apply against it - Terraform will attempt an update,
 which also fails, and you lose another 30 minutes.
 
+### `The SQL pool is warming up. Please try again.` {#serverless-warming-up}
+
+```
+==> 010_database.sql  ->  [master]
+    XX 010_database.sql FAILED
+       The SQL pool is warming up. Please try again.
+```
+
+Exactly what it says, and it is an instruction rather than a failure. Serverless
+SQL has no always-on compute: the built-in pool resumes on demand, and the first
+statement after an idle period is rejected while that happens. It clears within
+a minute or two.
+
+`Deploy-ServerlessSql.ps1` retries these — five attempts backing off
+15/30/45/60/60s — and only these. The pattern is narrow on purpose:
+
+| Message | Retried |
+|---|---|
+| `is warming up` | yes |
+| `is not currently available` / `Please retry the connection` | yes |
+| `transport-level error` | yes |
+| `Login failed`, `Incorrect syntax`, storage RBAC errors | **no** — fail immediately |
+
+A retry loop that swallowed real errors would turn a five-second syntax failure
+into a five-minute one. Tune with `-WarmupRetryCount` if a cold pool in your
+region takes longer.
+
+This is also why a deployment can fail on a Monday morning and pass on a re-run
+with no change: whether the pool was warm depended on whether anyone had queried
+it recently.
+
 ### `ResourceNotDeletable` on `WorkspaceDefaultSqlServer` {#workspace-default-linked-services}
 
 ```

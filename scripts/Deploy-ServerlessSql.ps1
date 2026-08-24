@@ -48,7 +48,14 @@ param(
     [string] $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
 
     [int] $ConnectionTimeoutSeconds = 60,
-    [int] $QueryTimeoutSeconds      = 1800
+    [int] $QueryTimeoutSeconds      = 1800,
+
+    # Serverless SQL has no always-on compute. The first statement after the
+    # built-in pool has been idle is answered with "The SQL pool is warming up.
+    # Please try again." - an instruction, not a failure, and the pool is ready
+    # within a minute or two. Five attempts backing off 15/30/45/60/60s covers
+    # it with room to spare.
+    [int] $WarmupRetryCount = 5
 )
 
 Set-StrictMode -Version Latest
@@ -184,52 +191,76 @@ Write-Ok 'Token acquired.'
 
 $failed = @()
 
+# Errors that mean "not yet", not "no". The built-in pool resumes on demand, so
+# the first statement of a run - and any statement after a long gap - can be
+# rejected while compute is still coming up. Retrying is the documented
+# response; failing the deployment on it means a green run depends on whether
+# somebody happened to query the pool recently.
+$transientSqlErrors = 'is warming up|is not currently available|Please retry the connection|transport-level error'
+
 foreach ($script in $scripts) {
     $targetDatabase = if ($script.Name -like '010_*') { 'master' } else { $databaseName }
 
     Write-Step "$($script.Name)  ->  [$targetDatabase]"
 
-    try {
-        $output = Invoke-Sqlcmd `
-            -ServerInstance  $serverInstance `
-            -Database        $targetDatabase `
-            -AccessToken     $accessToken `
-            -InputFile       $script.FullName `
-            -Variable        $sqlcmdVariables `
-            -QueryTimeout    $QueryTimeoutSeconds `
-            -ConnectionTimeout $ConnectionTimeoutSeconds `
-            -AbortOnError `
-            -Verbose 4>&1
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            $output = Invoke-Sqlcmd `
+                -ServerInstance  $serverInstance `
+                -Database        $targetDatabase `
+                -AccessToken     $accessToken `
+                -InputFile       $script.FullName `
+                -Variable        $sqlcmdVariables `
+                -QueryTimeout    $QueryTimeoutSeconds `
+                -ConnectionTimeout $ConnectionTimeoutSeconds `
+                -AbortOnError `
+                -Verbose 4>&1
 
-        # PRINT output arrives on the verbose stream. Surfacing it is what makes
-        # the deployment log actually useful - the scripts print row counts,
-        # principal lists and collation warnings.
-        $output | ForEach-Object {
-            $line = "$_".Trim()
-            if ($line) { Write-Host "    | $line" -ForegroundColor DarkGray }
+            # PRINT output arrives on the verbose stream. Surfacing it is what makes
+            # the deployment log actually useful - the scripts print row counts,
+            # principal lists and collation warnings.
+            $output | ForEach-Object {
+                $line = "$_".Trim()
+                if ($line) { Write-Host "    | $line" -ForegroundColor DarkGray }
+            }
+
+            Write-Ok "$($script.Name) OK"
+            break
         }
+        catch {
+            $message = $_.Exception.Message
 
-        Write-Ok "$($script.Name) OK"
+            if ($message -match $transientSqlErrors -and $attempt -le $WarmupRetryCount) {
+                $delay = [math]::Min(60, 15 * $attempt)
+                Write-Warn "$($script.Name): $message"
+                Write-Warn "Transient - waiting ${delay}s for the pool, then retrying (attempt $attempt of $WarmupRetryCount)."
+                Start-Sleep -Seconds $delay
+                continue
+            }
+
+            Write-Host "    XX $($script.Name) FAILED" -ForegroundColor Red
+            Write-Host "       $message" -ForegroundColor Red
+
+            # Translate the failures whose native message points at the wrong thing.
+            if ($message -match 'not associated with a trusted SQL Server connection|Login failed') {
+                Write-Warn 'The token was rejected. Check that the deployment service principal is a member of the Synapse admin Entra group (bootstrap output synapse_admin_group_names).'
+            }
+            elseif ($message -match 'timeout|network-related') {
+                Write-Warn 'This is almost certainly DNS, not SQL. Run scripts/Test-PlatformConnectivity.ps1 - if the endpoint resolves to a public IP, privatelink.sql.azuresynapse.net is not linked to this host''s VNet.'
+            }
+            elseif ($message -match 'content of directory cannot be listed|External table is not accessible') {
+                Write-Warn 'Storage RBAC, not SQL. The Synapse workspace managed identity needs Storage Blob Data Contributor on the lake - see infra/terraform/rbac.tf, synapse_lake_contributor.'
+            }
+
+            $failed += $script.Name
+            break
+        }
     }
-    catch {
-        $message = $_.Exception.Message
-        Write-Host "    XX $($script.Name) FAILED" -ForegroundColor Red
-        Write-Host "       $message" -ForegroundColor Red
 
-        # Translate the failures whose native message points at the wrong thing.
-        if ($message -match 'not associated with a trusted SQL Server connection|Login failed') {
-            Write-Warn 'The token was rejected. Check that the deployment service principal is a member of the Synapse admin Entra group (bootstrap output synapse_admin_group_names).'
-        }
-        elseif ($message -match 'timeout|network-related') {
-            Write-Warn 'This is almost certainly DNS, not SQL. Run scripts/Test-PlatformConnectivity.ps1 - if the endpoint resolves to a public IP, privatelink.sql.azuresynapse.net is not linked to this host''s VNet.'
-        }
-        elseif ($message -match 'content of directory cannot be listed|External table is not accessible') {
-            Write-Warn 'Storage RBAC, not SQL. The Synapse workspace managed identity needs Storage Blob Data Contributor on the lake - see infra/terraform/rbac.tf, synapse_lake_contributor.'
-        }
-
-        $failed += $script.Name
-        break   # order is a dependency graph; continuing past a failure is noise
-    }
+    # Order is a dependency graph; continuing past a failure is noise.
+    if ($failed.Count -gt 0) { break }
 }
 
 # ---------------------------------------------------------------------------
