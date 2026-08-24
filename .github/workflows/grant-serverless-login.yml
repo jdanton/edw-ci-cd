@@ -1,0 +1,134 @@
+# =============================================================================
+# grant-serverless-login.yml
+# =============================================================================
+# Gives an environment's deployment identity its own login on the Synapse
+# serverless endpoint. Manual only, and normally run exactly once per
+# environment.
+#
+# WHY IT CANNOT BE A LOCAL SCRIPT: the serverless endpoint is private, so the
+# statements have to originate from a host on a VNet linked to
+# privatelink.sql.azuresynapse.net. That is the self-hosted runner.
+#
+# WHY IT IS NOT PART OF synapse-cd: it only works while the deployment identity
+# is the workspace's SQL Entra ADMIN, which is a temporary state a human sets up
+# and tears down around this run. Wiring that into the deployment path would
+# mean a pipeline that grants itself administrative rights - see
+# bootstrap/providers.tf on why bootstrap is never in CI.
+#
+# THE SEQUENCE
+#
+#   1. az synapse sql ad-admin update -g <rg> --workspace-name <ws> \
+#        --display-name sp-<project>-github-deploy-<env> \
+#        --object-id <sp-object-id>
+#
+#   2. run this workflow for <env>
+#
+#   3. az synapse sql ad-admin update -g <rg> --workspace-name <ws> \
+#        --display-name sg-<project>-synapseadmin-<env> \
+#        --object-id <group-object-id>
+#
+# Step 3 is not optional. While the service principal holds the admin, humans in
+# the admin group do not have it, and Terraform owns that setting - the next
+# infra-cd apply would revert it anyway, at a moment of its choosing rather than
+# yours.
+# =============================================================================
+
+name: Grant serverless login
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, test, prod]
+
+      principal_name:
+        description: 'Entra display name to grant (blank = this environment''s deployment identity)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: grant-serverless-login-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  grant:
+    name: Grant on ${{ inputs.environment }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+
+    env:
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: terraform init (read outputs)
+        working-directory: infra/terraform
+        run: |
+          terraform init -reconfigure -no-color \
+            -backend-config=envs/${{ inputs.environment }}/backend.hcl
+
+      # Defaulting to the identity this job is already running as is the whole
+      # point: that principal is the one that cannot log in, and it is the one
+      # holding the temporary admin.
+      - name: Resolve the principal
+        id: principal
+        shell: pwsh
+        run: |
+          $name = '${{ inputs.principal_name }}'
+          if ([string]::IsNullOrWhiteSpace($name)) {
+            $name = az ad sp show --id '${{ vars.AZURE_CLIENT_ID }}' --query displayName -o tsv
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($name)) {
+              throw "Could not resolve a display name for ${{ vars.AZURE_CLIENT_ID }}. Pass principal_name explicitly."
+            }
+          }
+          Write-Host "Principal: $name"
+          "name=$name" >> $env:GITHUB_OUTPUT
+
+      - name: Grant the login
+        shell: pwsh
+        run: |
+          ./scripts/Grant-ServerlessLogin.ps1 `
+            -Environment '${{ inputs.environment }}' `
+            -PrincipalName '${{ steps.principal.outputs.name }}'
+
+      - name: Summary
+        if: always()
+        shell: pwsh
+        run: |
+          Add-Content $env:GITHUB_STEP_SUMMARY @"
+          ## Serverless login - ``${{ inputs.environment }}``
+
+          | | |
+          |---|---|
+          | Principal | ``${{ steps.principal.outputs.name }}`` |
+          | Result | ${{ job.status }} |
+
+          > **Hand the workspace SQL admin back to the admin group now** if you
+          > swapped it to run this. While the service principal holds it, humans
+          > in that group do not.
+          "@
