@@ -216,13 +216,19 @@ FROM dim.TaxiZone;
 if ($PSCmdlet.ShouldProcess("$($tf.sqlServerFqdn)/$($tf.sqlDatabaseName)", 'Merge dim.TaxiZone')) {
     Write-Step "Merging $($zones.Count) zones into dim.TaxiZone."
 
-    $result = Invoke-Sqlcmd `
-        -ServerInstance $tf.sqlServerFqdn `
-        -Database       $tf.sqlDatabaseName `
-        -AccessToken    $accessToken `
-        -Query          $mergeSql `
-        -QueryTimeout   300 `
-        -AbortOnError
+    # dev and test are auto-pausing serverless databases, and this is often the
+    # first thing to touch one all day - the resume outlasts the client timeout.
+    # Classification and backoff live in _Tooling.ps1.
+    $result = Invoke-SqlWithRetry -Activity 'dim.TaxiZone merge' -ScriptBlock {
+        Invoke-Sqlcmd `
+            -ServerInstance    $tf.sqlServerFqdn `
+            -Database          $tf.sqlDatabaseName `
+            -AccessToken       $accessToken `
+            -Query             $mergeSql `
+            -QueryTimeout      300 `
+            -ConnectionTimeout 60 `
+            -AbortOnError
+    }
 
     Write-Ok "dim.TaxiZone: $($result.TotalZones) rows ($($result.RealZones) real, $($result.AirportZones) airport)."
 

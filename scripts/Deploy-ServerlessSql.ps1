@@ -40,6 +40,10 @@
     Print the resolved SQLCMD variables and the script order without connecting.
 #>
 [CmdletBinding(SupportsShouldProcess)]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ConnectionTimeoutSeconds',
+    Justification = 'Used inside the scriptblock handed to Invoke-SqlWithRetry. The analyzer does not follow parameters into a scriptblock argument, so it reports them unused.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'QueryTimeoutSeconds',
+    Justification = 'Used inside the scriptblock handed to Invoke-SqlWithRetry. The analyzer does not follow parameters into a scriptblock argument, so it reports them unused.')]
 param(
     [Parameter(Mandatory)]
     [ValidateSet('dev', 'test', 'prod')]
@@ -191,32 +195,27 @@ Write-Ok 'Token acquired.'
 
 $failed = @()
 
-# Errors that mean "not yet", not "no". The built-in pool resumes on demand, so
-# the first statement of a run - and any statement after a long gap - can be
-# rejected while compute is still coming up. Retrying is the documented
-# response; failing the deployment on it means a green run depends on whether
-# somebody happened to query the pool recently.
-$transientSqlErrors = 'is warming up|is not currently available|Please retry the connection|transport-level error'
-
 foreach ($script in $scripts) {
     $targetDatabase = if ($script.Name -like '010_*') { 'master' } else { $databaseName }
 
     Write-Step "$($script.Name)  ->  [$targetDatabase]"
 
-    $attempt = 0
-    while ($true) {
-        $attempt++
-        try {
-            $output = Invoke-Sqlcmd `
-                -ServerInstance  $serverInstance `
-                -Database        $targetDatabase `
-                -AccessToken     $accessToken `
-                -InputFile       $script.FullName `
-                -Variable        $sqlcmdVariables `
-                -QueryTimeout    $QueryTimeoutSeconds `
+    try {
+        # Retry classification lives in _Tooling.ps1 so that this script, the
+        # login grant, the reference-data load and the workflows all agree on
+        # what "transient" means.
+        $output = Invoke-SqlWithRetry -Activity $script.Name -MaxAttempts $WarmupRetryCount -ScriptBlock {
+            Invoke-Sqlcmd `
+                -ServerInstance    $serverInstance `
+                -Database          $targetDatabase `
+                -AccessToken       $accessToken `
+                -InputFile         $script.FullName `
+                -Variable          $sqlcmdVariables `
+                -QueryTimeout      $QueryTimeoutSeconds `
                 -ConnectionTimeout $ConnectionTimeoutSeconds `
                 -AbortOnError `
                 -Verbose 4>&1
+        }
 
             # PRINT output arrives on the verbose stream. Surfacing it is what makes
             # the deployment log actually useful - the scripts print row counts,
@@ -226,19 +225,10 @@ foreach ($script in $scripts) {
                 if ($line) { Write-Host "    | $line" -ForegroundColor DarkGray }
             }
 
-            Write-Ok "$($script.Name) OK"
-            break
-        }
-        catch {
+        Write-Ok "$($script.Name) OK"
+    }
+    catch {
             $message = $_.Exception.Message
-
-            if ($message -match $transientSqlErrors -and $attempt -le $WarmupRetryCount) {
-                $delay = [math]::Min(60, 15 * $attempt)
-                Write-Warn "$($script.Name): $message"
-                Write-Warn "Transient - waiting ${delay}s for the pool, then retrying (attempt $attempt of $WarmupRetryCount)."
-                Start-Sleep -Seconds $delay
-                continue
-            }
 
             Write-Host "    XX $($script.Name) FAILED" -ForegroundColor Red
             Write-Host "       $message" -ForegroundColor Red
@@ -255,8 +245,6 @@ foreach ($script in $scripts) {
             }
 
             $failed += $script.Name
-            break
-        }
     }
 
     # Order is a dependency graph; continuing past a failure is noise.

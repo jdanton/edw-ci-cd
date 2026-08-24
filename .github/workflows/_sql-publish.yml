@@ -171,6 +171,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          . ./scripts/_Tooling.ps1        # Invoke-SqlWithRetry, one definition for the whole repo
 
           if (-not (Get-Module -ListAvailable -Name SqlServer)) {
             Install-Module SqlServer -Scope CurrentUser -Force -AllowClobber -MinimumVersion 22.0.0
@@ -181,31 +182,14 @@ jobs:
           $database = '${{ steps.target.outputs.database }}'
           $token    = '${{ steps.token.outputs.value }}'
 
-          # 8 attempts backing off 15s to 60s covers ~5 minutes, comfortably
-          # more than a serverless resume, and stops rather than hanging a job
-          # for an hour if the database is genuinely unreachable.
-          $max = 8
-          for ($attempt = 1; $attempt -le $max; $attempt++) {
-              try {
-                  $r = Invoke-Sqlcmd -ServerInstance $server -Database $database `
-                                     -AccessToken $token `
-                                     -Query 'SELECT DatabaseState = DATABASEPROPERTYEX(DB_NAME(), ''Status'');' `
-                                     -ConnectionTimeout 60 -QueryTimeout 120 -ErrorAction Stop
-                  Write-Host "    $database is $($r.DatabaseState) - awake after $attempt attempt(s)."
-                  exit 0
-              }
-              catch {
-                  $message = $_.Exception.Message
-                  if ($attempt -eq $max) {
-                      Write-Host "::error::$database did not come online after $max attempts. Last error: $message"
-                      throw
-                  }
-                  $delay = [math]::Min(60, 15 * $attempt)
-                  Write-Host "    attempt $attempt/$max - $message"
-                  Write-Host "    resuming; waiting ${delay}s"
-                  Start-Sleep -Seconds $delay
-              }
+          $r = Invoke-SqlWithRetry -Activity "$database resume" -ScriptBlock {
+              Invoke-Sqlcmd -ServerInstance $server -Database $database `
+                            -AccessToken $token `
+                            -Query 'SELECT DatabaseState = DATABASEPROPERTYEX(DB_NAME(), ''Status'');' `
+                            -ConnectionTimeout 60 -QueryTimeout 120 -ErrorAction Stop
           }
+
+          Write-Host "    $database is $($r.DatabaseState)."
 
       # -----------------------------------------------------------------------
       # 1. What would change?
@@ -352,7 +336,10 @@ jobs:
               AdfUser     = (SELECT COUNT(*) FROM sys.database_principals WHERE name = '$adf');
           "@
 
-          $r = Invoke-Sqlcmd -ServerInstance $server -Database $db -AccessToken $token -Query $query -QueryTimeout 300
+          . ./scripts/_Tooling.ps1
+          $r = Invoke-SqlWithRetry -Activity 'post-publish verification' -ScriptBlock {
+            Invoke-Sqlcmd -ServerInstance $server -Database $db -AccessToken $token -Query $query -QueryTimeout 300 -ConnectionTimeout 60
+          }
 
           Write-Host "Tables      : $($r.Tables)"
           Write-Host "Views       : $($r.Views)"

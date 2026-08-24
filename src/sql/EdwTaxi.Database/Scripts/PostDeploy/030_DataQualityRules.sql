@@ -132,6 +132,8 @@ WHEN NOT MATCHED BY SOURCE THEN
        decide what to do with the history rather than losing it silently. */
     DELETE;
 
-PRINT CONCAT('  meta.DataQualityRule: ', (SELECT COUNT(*) FROM meta.DataQualityRule), ' rules (',
-             (SELECT COUNT(*) FROM meta.DataQualityRule WHERE IsEnabled = 1), ' enabled).');
+DECLARE @RuleCount   int = (SELECT COUNT(*) FROM meta.DataQualityRule);
+DECLARE @EnabledRules int = (SELECT COUNT(*) FROM meta.DataQualityRule WHERE IsEnabled = 1);
+PRINT CONCAT('  meta.DataQualityRule: ', @RuleCount, ' rules (',
+             @EnabledRules, ' enabled).');
 GO

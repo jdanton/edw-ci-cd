@@ -49,7 +49,8 @@ WHEN NOT MATCHED BY TARGET
     THEN INSERT (VendorKey, VendorId, VendorName, IsUnknown)
          VALUES (source.VendorKey, source.VendorId, source.VendorName, source.IsUnknown);
 
-PRINT CONCAT('  dim.Vendor: ', (SELECT COUNT(*) FROM dim.Vendor), ' rows.');
+DECLARE @VendorRows int = (SELECT COUNT(*) FROM dim.Vendor);
+PRINT CONCAT('  dim.Vendor: ', @VendorRows, ' rows.');
 GO
 
 /* ---------------------------------------------------------------------------
@@ -82,7 +83,8 @@ WHEN NOT MATCHED BY TARGET
     THEN INSERT (RateCodeKey, RateCodeId, RateCodeName, IsFlatFare, IsUnknown)
          VALUES (source.RateCodeKey, source.RateCodeId, source.RateCodeName, source.IsFlatFare, source.IsUnknown);
 
-PRINT CONCAT('  dim.RateCode: ', (SELECT COUNT(*) FROM dim.RateCode), ' rows.');
+DECLARE @RateCodeRows int = (SELECT COUNT(*) FROM dim.RateCode);
+PRINT CONCAT('  dim.RateCode: ', @RateCodeRows, ' rows.');
 GO
 
 /* ---------------------------------------------------------------------------
@@ -113,7 +115,8 @@ WHEN NOT MATCHED BY TARGET
     THEN INSERT (PaymentTypeKey, PaymentTypeId, PaymentTypeName, IsTipRecorded, IsUnknown)
          VALUES (source.PaymentTypeKey, source.PaymentTypeId, source.PaymentTypeName, source.IsTipRecorded, source.IsUnknown);
 
-PRINT CONCAT('  dim.PaymentType: ', (SELECT COUNT(*) FROM dim.PaymentType), ' rows.');
+DECLARE @PaymentTypeRows int = (SELECT COUNT(*) FROM dim.PaymentType);
+PRINT CONCAT('  dim.PaymentType: ', @PaymentTypeRows, ' rows.');
 GO
 
 /* ---------------------------------------------------------------------------
@@ -125,6 +128,7 @@ BEGIN
     VALUES (-1, NULL, 'Unknown', 'Unknown', NULL, 1);
 END
 
-PRINT CONCAT('  dim.TaxiZone: ', (SELECT COUNT(*) FROM dim.TaxiZone),
+DECLARE @TaxiZoneRows int = (SELECT COUNT(*) FROM dim.TaxiZone);
+PRINT CONCAT('  dim.TaxiZone: ', @TaxiZoneRows,
              ' rows (265 real zones are loaded from the lake, not from here).');
 GO

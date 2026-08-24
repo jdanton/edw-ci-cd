@@ -146,6 +146,131 @@ Pick one:
     return $command.Source
 }
 
+# ---------------------------------------------------------------------------
+# TRANSIENT SQL FAILURES
+#
+# Every SQL endpoint in this platform can refuse a connection for reasons that
+# resolve themselves in under a minute, and none of them say so clearly:
+#
+#   Azure SQL, dev and test    GP_S_Gen5 with auto-pause. A paused database
+#                              accepts the TCP connection and then takes 30-60s
+#                              to resume. The client gives up first, reporting
+#                              "Connection Timeout Expired. The timeout period
+#                              elapsed during the post-login phase" - which
+#                              reads like a firewall or port-range fault.
+#
+#   Synapse serverless         No always-on compute. The first statement after
+#                              an idle period is answered with "The SQL pool is
+#                              warming up. Please try again." - an instruction,
+#                              not a failure.
+#
+#   Either, any time           40613 not currently available, 40197 service
+#                              error, transport-level errors during a planned
+#                              failover.
+#
+# Retrying these is the documented response. Retrying ANYTHING ELSE is harmful:
+# it turns a five-second syntax error into a five-minute one and buries the real
+# message under attempts. So the classification is deliberately narrow, and
+# checked by error NUMBER where the provider gives one - message text varies by
+# driver and locale, numbers do not.
+# ---------------------------------------------------------------------------
+
+$script:TransientSqlErrorNumbers = @(
+    -2,     # client timeout - covers the paused-database resume
+    20,     # instance does not support encryption (transient during failover)
+    64,     # connection failed during login
+    233,    # named pipe / transport closed
+    4060,   # cannot open database (transient during resume)
+    10053,  # transport-level error on receive
+    10054,  # existing connection forcibly closed
+    10060,  # network or instance-specific error
+    10928,  # resource limit reached
+    10929,  # server too busy
+    40197,  # the service has encountered an error processing your request
+    40501,  # service is busy
+    40613,  # database is not currently available
+    49918,  # cannot process request, not enough resources
+    49919,  # cannot process create or update request
+    49920   # cannot process request, too many operations
+)
+
+# Belt and braces for drivers that surface a message but no usable number.
+$script:TransientSqlErrorPattern =
+    'is warming up|is not currently available|Please retry the connection|' +
+    'transport-level error|Connection Timeout Expired|post-login phase|' +
+    'semaphore timeout|is paused|resuming'
+
+function Test-TransientSqlError {
+    <#
+    .SYNOPSIS
+        True when an ErrorRecord is a SQL failure worth retrying.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $ErrorRecord)
+
+    # Walk the inner exceptions: Invoke-Sqlcmd wraps SqlException, and the
+    # number lives on the wrapped one.
+    $exception = $ErrorRecord.Exception
+    while ($exception) {
+        $number = $exception.PSObject.Properties['Number']
+        if ($number -and $number.Value -in $script:TransientSqlErrorNumbers) {
+            return $true
+        }
+        $exception = $exception.InnerException
+    }
+
+    return ($ErrorRecord.Exception.Message -match $script:TransientSqlErrorPattern)
+}
+
+function Invoke-SqlWithRetry {
+    <#
+    .SYNOPSIS
+        Runs a scriptblock, retrying only transient SQL failures.
+
+    .DESCRIPTION
+        Takes a scriptblock rather than proxying Invoke-Sqlcmd's parameters, so
+        callers keep -InputFile, -Variable, -AbortOnError and everything else
+        exactly as they had them, and the return value passes straight through.
+
+        Backs off 15s, 30s, 45s, 60s, 60s... Eight attempts is about five
+        minutes - comfortably longer than a serverless resume, and short enough
+        that a genuinely unreachable endpoint fails inside a coffee break
+        instead of holding a runner for an hour.
+
+    .EXAMPLE
+        $rows = Invoke-SqlWithRetry -Activity 'dim.TaxiZone merge' -ScriptBlock {
+            Invoke-Sqlcmd -ServerInstance $fqdn -Database $db -AccessToken $t -Query $sql
+        }
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [scriptblock] $ScriptBlock,
+        [string] $Activity = 'SQL command',
+        [int]    $MaxAttempts = 8
+    )
+
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            return & $ScriptBlock
+        }
+        catch {
+            if (-not (Test-TransientSqlError $_)) { throw }
+
+            if ($attempt -ge $MaxAttempts) {
+                Write-Host "    $Activity - still failing after $MaxAttempts attempt(s)." -ForegroundColor Red
+                throw
+            }
+
+            $delay = [math]::Min(60, 15 * $attempt)
+            Write-Host "    $Activity - transient: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "    retrying in ${delay}s (attempt $attempt of $MaxAttempts)" -ForegroundColor Yellow
+            Start-Sleep -Seconds $delay
+        }
+    }
+}
+
 # Applied on dot-source. Safe and idempotent: only existing directories are
 # added, and only if absent.
 Add-KnownToolPath

@@ -85,7 +85,8 @@ WHERE NOT EXISTS (
 )
 OPTION (MAXRECURSION 0);
 
-PRINT CONCAT('  dim.Date now holds ', (SELECT COUNT(*) FROM dim.Date), ' rows.');
+DECLARE @DateRows int = (SELECT COUNT(*) FROM dim.Date);
+PRINT CONCAT('  dim.Date now holds ', @DateRows, ' rows.');
 GO
 
 /* -----------------------------------------------------------------------------

@@ -181,9 +181,15 @@ jobs:
               Procedures          = (SELECT COUNT(*) FROM sys.procedures);
           '@
 
-          $r = Invoke-Sqlcmd -ServerInstance $ctx.serverlessEndpoint `
-                             -Database $ctx.databaseName `
-                             -AccessToken $token -Query $query -QueryTimeout 120
+          . ./scripts/_Tooling.ps1        # Invoke-SqlWithRetry
+
+          # The built-in pool may have gone cold between the deployment and this
+          # check - the same "warming up" that the deployment itself retries.
+          $r = Invoke-SqlWithRetry -Activity 'smoke test' -ScriptBlock {
+            Invoke-Sqlcmd -ServerInstance $ctx.serverlessEndpoint `
+                          -Database $ctx.databaseName `
+                          -AccessToken $token -Query $query -QueryTimeout 120 -ConnectionTimeout 60
+          }
 
           Write-Host "External data sources: $($r.ExternalDataSources)"
           Write-Host "File formats         : $($r.FileFormats)"
@@ -199,10 +205,12 @@ jobs:
           # reports as "content of directory cannot be listed", an error that
           # reads like a path bug and is not.
           try {
-            $probe = Invoke-Sqlcmd -ServerInstance $ctx.serverlessEndpoint `
-                                   -Database $ctx.databaseName `
-                                   -AccessToken $token -QueryTimeout 300 `
-                                   -Query 'SELECT TOP (1) PickupYear FROM raw.vw_YellowTaxiTrip;'
+            $probe = Invoke-SqlWithRetry -Activity 'storage probe' -ScriptBlock {
+              Invoke-Sqlcmd -ServerInstance $ctx.serverlessEndpoint `
+                            -Database $ctx.databaseName `
+                            -AccessToken $token -QueryTimeout 300 -ConnectionTimeout 60 `
+                            -Query 'SELECT TOP (1) PickupYear FROM raw.vw_YellowTaxiTrip;'
+            }
 
             if ($probe) {
               Write-Host "Storage access confirmed - raw layer is readable."

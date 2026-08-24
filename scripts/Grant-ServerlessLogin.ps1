@@ -61,6 +61,10 @@
     Print the statements without connecting.
 #>
 [CmdletBinding(SupportsShouldProcess)]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ConnectionTimeoutSeconds',
+    Justification = 'Used inside the scriptblock handed to Invoke-SqlWithRetry. The analyzer does not follow parameters into a scriptblock argument, so it reports them unused.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'QueryTimeoutSeconds',
+    Justification = 'Used inside the scriptblock handed to Invoke-SqlWithRetry. The analyzer does not follow parameters into a scriptblock argument, so it reports them unused.')]
 param(
     [Parameter(Mandatory)]
     [ValidateSet('dev', 'test', 'prod')]
@@ -183,15 +187,11 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tokenJson)) {
 $accessToken = ($tokenJson | ConvertFrom-Json).accessToken
 Write-Ok 'Token acquired.'
 
-$transientSqlErrors = 'is warming up|is not currently available|Please retry the connection|transport-level error'
-
 Write-Step "Granting on [master] at $serverInstance."
 
-$attempt = 0
-while ($true) {
-    $attempt++
-    try {
-        $output = Invoke-Sqlcmd `
+try {
+    $output = Invoke-SqlWithRetry -Activity 'grant' -MaxAttempts $WarmupRetryCount -ScriptBlock {
+        Invoke-Sqlcmd `
             -ServerInstance    $serverInstance `
             -Database          'master' `
             -AccessToken       $accessToken `
@@ -200,30 +200,19 @@ while ($true) {
             -ConnectionTimeout $ConnectionTimeoutSeconds `
             -AbortOnError `
             -Verbose 4>&1
-
-        $output | ForEach-Object {
-            $line = "$_".Trim()
-            if ($line) { Write-Host "    | $line" -ForegroundColor DarkGray }
-        }
-        break
     }
-    catch {
-        $message = $_.Exception.Message
 
-        if ($message -match $transientSqlErrors -and $attempt -le $WarmupRetryCount) {
-            $delay = [math]::Min(60, 15 * $attempt)
-            Write-Warn "Transient: $message"
-            Write-Warn "Waiting ${delay}s for the pool, then retrying (attempt $attempt of $WarmupRetryCount)."
-            Start-Sleep -Seconds $delay
-            continue
-        }
-
-        if ($message -match 'Login failed') {
-            Write-Warn 'The connecting principal is not an administrator of this endpoint.'
-            Write-Warn 'This script has to run AS an admin - see the chicken-and-egg note in its header.'
-        }
-        throw
+    $output | ForEach-Object {
+        $line = "$_".Trim()
+        if ($line) { Write-Host "    | $line" -ForegroundColor DarkGray }
     }
+}
+catch {
+    if ($_.Exception.Message -match 'Login failed') {
+        Write-Warn 'The connecting principal is not an administrator of this endpoint.'
+        Write-Warn 'This script has to run AS an admin - see the chicken-and-egg note in its header.'
+    }
+    throw
 }
 
 # ---------------------------------------------------------------------------
@@ -232,13 +221,15 @@ while ($true) {
 
 Write-Step 'Verifying.'
 
-$result = Invoke-Sqlcmd `
-    -ServerInstance    $serverInstance `
-    -Database          'master' `
-    -AccessToken       $accessToken `
-    -Query             $verifySql `
-    -QueryTimeout      120 `
-    -ConnectionTimeout $ConnectionTimeoutSeconds
+$result = Invoke-SqlWithRetry -Activity 'verify' -ScriptBlock {
+    Invoke-Sqlcmd `
+        -ServerInstance    $serverInstance `
+        -Database          'master' `
+        -AccessToken       $accessToken `
+        -Query             $verifySql `
+        -QueryTimeout      120 `
+        -ConnectionTimeout $ConnectionTimeoutSeconds
+}
 
 if (-not $result) {
     throw "No login named '$PrincipalName' exists after the grant. Nothing was changed."
