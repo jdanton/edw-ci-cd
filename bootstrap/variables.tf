@@ -156,6 +156,32 @@ variable "human_admin_object_ids" {
   default     = []
 }
 
+variable "state_storage_suffix" {
+  description = <<-EOT
+    Pins the 5-character suffix in the Terraform state account's name instead of
+    generating one. Leave null on a first bootstrap.
+
+    Set it when REBUILDING LOST BOOTSTRAP STATE. The account name is derived
+    from this suffix, and the name is ForceNew, so a rebuilt state that
+    generates a fresh suffix plans to destroy the account holding every
+    environment's Terraform state. Importing random_string does not help:
+    import cannot recover `special`/`upper`, the provider substitutes its own
+    defaults, and the mismatch forces a new value anyway.
+
+    Read the existing suffix off the account name - stedwtaxitfstate69gc4 is
+    "st" + project + "tfstate" + suffix, so the suffix is the last 5 characters:
+
+        az storage account list --query "[?starts_with(name,'st<project>tfstate')].name" -o tsv
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.state_storage_suffix == null || can(regex("^[a-z0-9]{1,10}$", coalesce(var.state_storage_suffix, "x")))
+    error_message = "Must be lowercase alphanumeric - it becomes part of a storage account name."
+  }
+}
+
 variable "state_storage_replication" {
   description = "Replication for the Terraform state account. GRS is the sane default - losing state is far more painful than the marginal cost."
   type        = string

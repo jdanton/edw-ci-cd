@@ -14,7 +14,16 @@
 locals {
   # Deterministic-ish suffix. Kept in state; if you lose state and re-create,
   # the suffix changes and you must update the backend config in every env.
-  suffix = random_string.suffix.result
+  #
+  # var.state_storage_suffix pins it instead, which is the only way to rebuild
+  # lost state without renaming the state account. Importing random_string does
+  # NOT work: import cannot recover the generation parameters, so the provider
+  # fills schema defaults (special = true, upper = true), those disagree with
+  # the arguments below, and the disagreement is ForceNew - Terraform plans a
+  # new suffix, a new account name, and the destruction of the account holding
+  # every environment's state. prevent_destroy on the account is what turns
+  # that into an error instead of an outage.
+  suffix = coalesce(var.state_storage_suffix, one(random_string.suffix[*].result))
 
   state_resource_group_name = "rg-${var.project}-tfstate-${var.location}"
   state_storage_account_name = substr(
@@ -57,6 +66,10 @@ locals {
 }
 
 resource "random_string" "suffix" {
+  # Not created when the suffix is pinned - a vestigial random value that
+  # nothing reads is a trap for the next person to open this file.
+  count = var.state_storage_suffix == null ? 1 : 0
+
   length  = 5
   lower   = true
   upper   = false
@@ -349,6 +362,14 @@ resource "azurerm_role_assignment" "deploy_contributor" {
   description = "EDW ${each.key} deployment identity."
 
   depends_on = [time_sleep.wait_for_sp_replication]
+
+  # Create-only in the provider: an imported role assignment always carries
+  # false, and azurerm answers an attempt to correct it with "doesn't support
+  # update". Without this, state rebuilt by import shows a diff that can never
+  # be applied. It changes nothing at create time, where the value is honoured.
+  lifecycle {
+    ignore_changes = [skip_service_principal_aad_check]
+  }
 }
 
 # Terraform assigns data-plane roles (Storage Blob Data Contributor to the ADF
@@ -409,6 +430,14 @@ resource "azurerm_role_assignment" "deploy_rbac_admin" {
   EOT
 
   depends_on = [time_sleep.wait_for_sp_replication]
+
+  # Create-only in the provider: an imported role assignment always carries
+  # false, and azurerm answers an attempt to correct it with "doesn't support
+  # update". Without this, state rebuilt by import shows a diff that can never
+  # be applied. It changes nothing at create time, where the value is honoured.
+  lifecycle {
+    ignore_changes = [skip_service_principal_aad_check]
+  }
 }
 
 # Deployment identity: read/write Terraform state.
@@ -424,6 +453,14 @@ resource "azurerm_role_assignment" "deploy_state_blob" {
   description = "Terraform state read/write for ${each.key}."
 
   depends_on = [time_sleep.wait_for_sp_replication]
+
+  # Create-only in the provider: an imported role assignment always carries
+  # false, and azurerm answers an attempt to correct it with "doesn't support
+  # update". Without this, state rebuilt by import shows a diff that can never
+  # be applied. It changes nothing at create time, where the value is honoured.
+  lifecycle {
+    ignore_changes = [skip_service_principal_aad_check]
+  }
 }
 
 # CI identity: read the whole subscription so `terraform plan` can refresh.
@@ -437,6 +474,14 @@ resource "azurerm_role_assignment" "ci_reader" {
   description = "EDW read-only CI identity."
 
   depends_on = [time_sleep.wait_for_sp_replication]
+
+  # Create-only in the provider: an imported role assignment always carries
+  # false, and azurerm answers an attempt to correct it with "doesn't support
+  # update". Without this, state rebuilt by import shows a diff that can never
+  # be applied. It changes nothing at create time, where the value is honoured.
+  lifecycle {
+    ignore_changes = [skip_service_principal_aad_check]
+  }
 }
 
 # `terraform plan` writes a lock blob, so read-only is not sufficient here.
@@ -450,6 +495,14 @@ resource "azurerm_role_assignment" "ci_state_blob" {
   description = "Terraform state lock for plan-only runs."
 
   depends_on = [time_sleep.wait_for_sp_replication]
+
+  # Create-only in the provider: an imported role assignment always carries
+  # false, and azurerm answers an attempt to correct it with "doesn't support
+  # update". Without this, state rebuilt by import shows a diff that can never
+  # be applied. It changes nothing at create time, where the value is honoured.
+  lifecycle {
+    ignore_changes = [skip_service_principal_aad_check]
+  }
 }
 
 # Key Vault secret read for the CI identity is deliberately NOT granted.

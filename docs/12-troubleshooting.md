@@ -642,48 +642,60 @@ which also fails, and you lose another 30 minutes.
        Login failed for user '<token-identified principal>'.
 ```
 
-The token is valid — it was issued, and ARM calls in the same job succeeded.
-What it lacks is any standing on the serverless endpoint. That endpoint's
-administrator is an **Entra group**, and the deployment service principal has to
-be a member of it. This is not Azure RBAC: Contributor on the workspace grants
-nothing here.
+The token is valid — it was issued, and ARM calls in the same job succeed. The
+workspace simply cannot tell that the principal presenting it is an
+administrator.
 
-Check the workspace's admin, then the group's membership:
+The workspace's SQL administrator is an Entra **group**, and the deployment
+identity is a service principal inside that group. Resolving "is this service
+principal a member of that group" requires the workspace's own managed identity
+to read the directory — the **Directory Readers** role. A human in the same
+group authenticates without it, which is what makes this look like an
+SP-specific permissions bug rather than a missing tenant role.
+
+Check, and grant:
 
 ```bash
-az synapse sql ad-admin show \
-  --workspace-name syn-edwtaxi-dev-65ri --resource-group rg-edwtaxi-dev-eus-2 \
-  --query "{login:login, groupObjectId:sid}" -o json
+MI=$(az synapse workspace show -n <workspace> -g <rg> --query identity.principalId -o tsv)
 
-az ad group member list --group <groupObjectId> --query "[].displayName" -o tsv
-az ad sp show --id <AZURE_CLIENT_ID from the environment> --query "{name:displayName, objectId:id}"
+# Empty output = the workspace cannot read the directory. This is the fault.
+az rest --method get \
+  --url "https://graph.microsoft.com/v1.0/servicePrincipals/$MI/memberOf" \
+  --query "value[].displayName" -o tsv
+
+ROLE=$(az rest --method get \
+  --url "https://graph.microsoft.com/v1.0/directoryRoles?\$filter=roleTemplateId eq '88d8e3e3-8f55-4a1e-953a-9b9898b8876b'" \
+  --query "value[0].id" -o tsv)
+
+az rest --method post \
+  --url "https://graph.microsoft.com/v1.0/directoryRoles/$ROLE/members/\$ref" \
+  --headers "Content-Type=application/json" \
+  --body "{\"@odata.id\":\"https://graph.microsoft.com/v1.0/directoryObjects/$MI\"}"
 ```
 
-Two traps in that check:
+Granting it needs **Privileged Role Administrator** or Global Administrator —
+more than the subscription Owner rights the rest of this template asks for, and
+it is a tenant-wide role, so it is not something bootstrap does for you. Allow a
+few minutes for the grant to reach the SQL data plane before re-running.
 
-- **`az ad` talks to the tenant of your CURRENT subscription.** If your default
-  subscription is in a different tenant, the group lookup returns
-  "Resource ... does not exist", which reads like the group was deleted. Run
-  `az account set --subscription <deployment sub>` first.
-- The `sid` field of the ad-admin output is the **group's object ID**, not a
-  security identifier in the Windows sense.
+Azure SQL needs the same grant for its own server identity before
+`CREATE USER ... FROM EXTERNAL PROVIDER` can resolve a service principal — see
+[ADF cannot log in to Azure SQL](#adf-cannot-log-in-to-azure-sql).
 
-`bootstrap/main.tf` declares the deploy identity as a member of both
-`sg-<project>-sqladmin-<env>` and `sg-<project>-synapseadmin-<env>`, so a group
-containing only humans means bootstrap drifted — most often because it was
-applied before the service principals had replicated through Entra, and never
-re-applied.
-
-Repair it by re-applying bootstrap **where its state lives**. Both the state
-and `terraform.tfvars` are gitignored, so a fresh clone has neither, and
-applying from an empty state creates a second set of app registrations, service
-principals and groups rather than fixing the membership. A correct plan touches
-group membership and nothing else.
-
-The same gap fails `sql-cd`: `sqlpackage` authenticates to Azure SQL as an Entra
-principal, so without membership in `sg-<project>-sqladmin-<env>` it cannot
-connect, and `040_ServicePrincipals.sql` never runs
-([above](#adf-cannot-log-in-to-azure-sql) is the *downstream* symptom of that).
+> **Do not diagnose this with `az ad group member list`.** It returns users and
+> silently omits service principals, so an admin group that contains the deploy
+> SP looks like it contains only humans — sending you to fix a membership that
+> was never broken. Use the explicit check, which answers for any principal
+> type:
+>
+> ```bash
+> az ad group member check --group <group-object-id> --member-id <sp-object-id> --query value
+> ```
+>
+> Note also that `az ad` commands run against the tenant of your **current**
+> subscription. With a default subscription in another tenant, group lookups
+> return "Resource ... does not exist", which reads like deletion rather than
+> the wrong directory.
 
 ### `The SQL pool is warming up. Please try again.` {#serverless-warming-up}
 
