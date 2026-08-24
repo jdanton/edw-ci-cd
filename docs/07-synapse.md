@@ -355,6 +355,32 @@ Deployment stops at the first failure rather than continuing, because
 continuing past a missing external data source produces a cascade of errors that
 obscure the real one.
 
+### The publish method is `AzSynapse`, not the module default
+
+`Deploy-Synapse.ps1` passes `-Method 'AzSynapse'` to `Publish-SynapseFromJson`.
+The module's default is `AzResource`, and the two write to different planes:
+
+| Method | Call | Endpoint |
+|---|---|---|
+| `AzResource` (default) | `New-AzResource` on `Microsoft.Synapse/workspaces/linkedservices` | ARM, which relays to the workspace |
+| `AzSynapse` | `Set-AzSynapseLinkedService -DefinitionFile` | `<workspace>.dev.azuresynapse.net` |
+
+The workspace has public network access disabled, and the
+`privatelink.dev.azuresynapse.net` zone ([04-networking](04-networking.md))
+exists to reach that Dev endpoint. The ARM route is the one path that private
+link does not cover, and it fails with a correlation id and no message at all.
+
+Note the asymmetry with Data Factory, which does **not** pass a method: ADF
+artifacts are genuine ARM resources, and the ARM control plane stays reachable
+with the data plane locked down. Synapse workspace artifacts are not ARM
+resources.
+
+Authorization differs too. The Dev API is governed by **Synapse RBAC**, not
+Azure RBAC — Contributor on the workspace grants nothing here. The deployment
+identity gets it by being a member of the Synapse admin group created in
+`bootstrap/`. A 401 or 403 from this step means that membership, not a network
+fault.
+
 ### `workspace/integrationRuntime/AutoResolveIntegrationRuntime.json`
 
 A placeholder, never deployed — `publish-options.json` excludes

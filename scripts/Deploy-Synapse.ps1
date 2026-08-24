@@ -209,6 +209,31 @@ Write-Ok "Using -$workspaceParameterName"
 $artifactCount = (Get-ChildItem -Path $workspaceRoot -Filter *.json -Recurse -ErrorAction SilentlyContinue).Count
 Write-Step "Publishing $artifactCount workspace artifact(s) to $workspaceName."
 
+# ---------------------------------------------------------------------------
+# Method: 'AzSynapse', NOT the module's 'AzResource' default.
+#
+# The two methods write to different planes:
+#
+#   AzResource (default)  New-AzResource against
+#                         Microsoft.Synapse/workspaces/linkedservices - the ARM
+#                         control plane, which relays the artifact to the
+#                         workspace's own endpoint.
+#   AzSynapse             Set-AzSynapseLinkedService -DefinitionFile, straight
+#                         at <workspace>.dev.azuresynapse.net.
+#
+# This platform's workspace has public network access disabled, and the whole
+# runner-connectivity setup exists to reach that Dev endpoint privately - the
+# privatelink.dev.azuresynapse.net zone in docs/04-networking.md is there for
+# exactly this call. The ARM route is the one plane the private link does not
+# cover, and it fails with a bare correlation id and no message:
+#
+#   New-AzResource: .../Deploy-SynapseObjectOnly.ps1:169
+#        | CorrelationId: 069f9a98-763e-4763-ae16-92cac9283c48
+#
+# sqlscripts, notebooks and Spark job definitions always go over the Dev REST
+# API whatever this is set to; the module says so in a warning.
+# ---------------------------------------------------------------------------
+
 $publishParams = @{
     RootFolder             = $workspaceRoot
     ResourceGroupName      = $resourceGroupName
@@ -216,6 +241,7 @@ $publishParams = @{
     Location               = $location
     Stage                  = $configPath
     Option                 = $opt
+    Method                 = 'AzSynapse'
 }
 
 if (-not $PSCmdlet.ShouldProcess($workspaceName, 'Publish Synapse artifacts')) {

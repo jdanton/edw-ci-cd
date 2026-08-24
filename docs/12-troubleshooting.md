@@ -632,6 +632,30 @@ az synapse workspace delete -n <workspace> -g <rg> --yes
 Do not simply re-run the apply against it - Terraform will attempt an update,
 which also fails, and you lose another 30 minutes.
 
+### `New-AzResource` fails with only a CorrelationId {#synapse-armresource-empty-error}
+
+```
+Start deploying object: [linkedService].[LS_ADLS_Lake] (1 dependency/ies)
+New-AzResource: .../azure.synapse.tools/0.27.0/private/Deploy-SynapseObjectOnly.ps1:169
+     | CorrelationId: 069f9a98-763e-4763-ae16-92cac9283c48
+```
+
+No message, because ARM returned none. The publish is going through the wrong
+plane: `Publish-SynapseFromJson` defaults to `-Method 'AzResource'`, which
+writes workspace artifacts through
+`Microsoft.Synapse/workspaces/linkedservices` on the ARM control plane instead
+of the workspace's own Dev endpoint. With public network access disabled on the
+workspace, that route does not work, and the private link this platform builds
+does not cover it.
+
+`Deploy-Synapse.ps1` pins `-Method 'AzSynapse'`
+([07-synapse](07-synapse.md#the-publish-method-is-azsynapse-not-the-module-default)).
+If it is missing from `$publishParams`, this is what you get.
+
+Do not confuse it with the identically-named cmdlet failing on Data Factory —
+there, `New-AzResource` is the *correct* call and a missing **Az.Resources**
+module is the cause ([above](#new-azresource-missing)).
+
 ### `ASWT0005: Referenced object [IntegrationRuntime].[AutoResolveIntegrationRuntime] was not found` {#aswt0005-autoresolve}
 
 ```
