@@ -90,6 +90,15 @@
       <Value>$(SqlCmdVar__DataFactoryName)</Value>
     </SqlCmdVariable>
 
+    <!-- Object ID of the Data Factory managed identity. Lets 040_ServicePrincipals
+         create the contained user BY SID, which needs no Microsoft Graph lookup and
+         therefore no Entra Directory Readers role on the server identity. Empty by
+         default: the script falls back to FROM EXTERNAL PROVIDER when it is absent. -->
+    <SqlCmdVariable Include="DataFactoryPrincipalId">
+      <DefaultValue></DefaultValue>
+      <Value>$(SqlCmdVar__DataFactoryPrincipalId)</Value>
+    </SqlCmdVariable>
+
     <SqlCmdVariable Include="EnvironmentName">
       <DefaultValue>dev</DefaultValue>
       <Value>$(SqlCmdVar__EnvironmentName)</Value>

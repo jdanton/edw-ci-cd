@@ -124,6 +124,7 @@ jobs:
             echo "server=$(terraform output -raw sql_server_fqdn)"
             echo "database=$(terraform output -raw sql_database_name)"
             echo "adf_name=$(terraform output -raw data_factory_name)"
+            echo "adf_principal_id=$(terraform output -raw data_factory_principal_id)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Verify the server is reachable
@@ -205,6 +206,7 @@ jobs:
             /AccessToken:"${{ steps.token.outputs.value }}" \
             /OutputPath:"deployreport-${{ inputs.environment }}.xml" \
             /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
+            /v:DataFactoryPrincipalId="${{ steps.target.outputs.adf_principal_id }}" \
             /v:EnvironmentName="${{ inputs.environment }}" \
             /v:DimDateStartYear=2009 \
             /v:DimDateEndYear=2035
@@ -272,6 +274,7 @@ jobs:
             /AccessToken:"${{ steps.token.outputs.value }}" \
             /OutputPath:"deployscript-${{ inputs.environment }}.sql" \
             /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
+            /v:DataFactoryPrincipalId="${{ steps.target.outputs.adf_principal_id }}" \
             /v:EnvironmentName="${{ inputs.environment }}" \
             /v:DimDateStartYear=2009 \
             /v:DimDateEndYear=2035
@@ -298,6 +301,7 @@ jobs:
             /TargetDatabaseName:"${{ steps.target.outputs.database }}" \
             /AccessToken:"${{ steps.token.outputs.value }}" \
             /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
+            /v:DataFactoryPrincipalId="${{ steps.target.outputs.adf_principal_id }}" \
             /v:EnvironmentName="${{ inputs.environment }}" \
             /v:DimDateStartYear=2009 \
             /v:DimDateEndYear=2035 \

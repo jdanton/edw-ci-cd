@@ -44,8 +44,10 @@ GO
 
 /* Dynamic SQL because CREATE USER does not accept a variable for the principal
    name, and because $(DataFactoryName) must be quoted as an identifier. */
-DECLARE @principal SYSNAME = N'$(DataFactoryName)';
+DECLARE @principal SYSNAME       = N'$(DataFactoryName)';
+DECLARE @objectId  NVARCHAR(64)   = N'$(DataFactoryPrincipalId)';
 DECLARE @sql       NVARCHAR(MAX);
+DECLARE @sid       VARBINARY(16);
 
 IF @principal IS NULL OR LTRIM(RTRIM(@principal)) = ''
 BEGIN
@@ -53,10 +55,46 @@ BEGIN
 END
 ELSE IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = @principal)
 BEGIN
-    PRINT CONCAT('  Creating database user [', @principal, '] from external provider...');
-
     BEGIN TRY
-        SET @sql = N'CREATE USER ' + QUOTENAME(@principal) + N' FROM EXTERNAL PROVIDER;';
+        /* -------------------------------------------------------------------
+           BY SID, NOT FROM EXTERNAL PROVIDER, WHEN WE KNOW THE OBJECT ID.
+
+           FROM EXTERNAL PROVIDER resolves the display name through Microsoft
+           Graph, and the SERVER's managed identity is what does the resolving -
+           so it needs the Entra "Directory Readers" role. That is a
+           tenant-level grant needing Privileged Role Administrator, which is
+           more than the subscription Owner rights the rest of this template
+           asks for, and it has to be repeated for every environment's server.
+           Without it the create fails and ADF pipelines then fail with "Login
+           failed for user '<token-identified principal>'" - an error three
+           layers away from the cause.
+
+           An Entra principal's SID in SQL is just its object ID in
+           little-endian byte order, which is exactly what casting a
+           uniqueidentifier to varbinary(16) produces. Supplying it directly
+           needs no directory read at all.
+
+           Terraform already knows the value (output data_factory_principal_id);
+           _sql-publish.yml passes it as /v:DataFactoryPrincipalId. When it is
+           absent - a hand-run sqlpackage, an older pipeline - this falls back
+           to the Graph path, so nothing that worked before stops working.
+           ------------------------------------------------------------------- */
+        IF @objectId IS NOT NULL AND LTRIM(RTRIM(@objectId)) <> ''
+           AND TRY_CAST(@objectId AS UNIQUEIDENTIFIER) IS NOT NULL
+        BEGIN
+            SET @sid = CAST(CAST(@objectId AS UNIQUEIDENTIFIER) AS VARBINARY(16));
+
+            PRINT CONCAT('  Creating database user [', @principal, '] by SID (no Graph lookup)...');
+
+            SET @sql = N'CREATE USER ' + QUOTENAME(@principal) +
+                       N' WITH SID = 0x' + CONVERT(NVARCHAR(64), @sid, 2) + N', TYPE = E;';
+        END
+        ELSE
+        BEGIN
+            PRINT CONCAT('  Creating database user [', @principal, '] from external provider...');
+            SET @sql = N'CREATE USER ' + QUOTENAME(@principal) + N' FROM EXTERNAL PROVIDER;';
+        END
+
         EXEC sp_executesql @sql;
     END TRY
     BEGIN CATCH
@@ -74,7 +112,9 @@ BEGIN
         PRINT '  *    Entra token. FROM EXTERNAL PROVIDER requires Entra.';
         PRINT '  *  - The name in $(DataFactoryName) does not match the';
         PRINT '  *    factory resource name.';
-        PRINT '  *  - The database has no outbound access to Microsoft Graph.';
+        PRINT '  *  - $(DataFactoryPrincipalId) was not supplied, so this fell';
+        PRINT '  *    back to Graph resolution, and the SERVER identity lacks';
+        PRINT '  *    the Entra Directory Readers role.';
         PRINT '  *';
         PRINT '  * ADF pipelines will fail with "Login failed for user';
         PRINT '  * <token-identified principal>" until this is resolved.';
