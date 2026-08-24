@@ -35,6 +35,7 @@ on:
     paths:
       - 'src/sql/**'
       - '.github/workflows/sql-cd.yml'
+      - '.github/workflows/_sql-publish.yml'
 
   workflow_dispatch:
     inputs:

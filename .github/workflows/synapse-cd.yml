@@ -36,6 +36,7 @@ on:
       - 'scripts/Deploy-ServerlessSql.ps1'
       - 'scripts/New-DeploymentConfig.ps1'
       - '.github/workflows/synapse-cd.yml'
+      - '.github/workflows/_synapse-deploy.yml'
 
   workflow_dispatch:
     inputs:

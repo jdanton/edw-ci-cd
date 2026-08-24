@@ -147,6 +147,67 @@ jobs:
           echo "value=$token" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
+      # Wake the database before sqlpackage touches it.
+      #
+      # dev and test run on serverless SKUs with auto-pause. A paused database
+      # accepts the TCP connection and then takes 30-60s to resume, which is
+      # longer than sqlpackage is willing to wait: it gives up with
+      #
+      #   *** Connection Timeout Expired. The timeout period elapsed during the
+      #       post-login phase.
+      #   Could not connect to server to retrieve default data paths
+      #
+      # That names neither the database nor the pause, and reads like a firewall
+      # or a port-range problem - the failure this platform's 11000-11999 NSG
+      # rule exists to prevent - so it sends you to the network first. It is
+      # simply the first connection of the day paying the resume.
+      #
+      # sqlpackage has no retry of its own, so the resume happens here instead,
+      # where a timeout is expected and retried rather than fatal. Once this
+      # succeeds the database is Online and every sqlpackage action that follows
+      # connects immediately.
+      # -----------------------------------------------------------------------
+      - name: Wake the database
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if (-not (Get-Module -ListAvailable -Name SqlServer)) {
+            Install-Module SqlServer -Scope CurrentUser -Force -AllowClobber -MinimumVersion 22.0.0
+          }
+          Import-Module SqlServer -Force
+
+          $server   = '${{ steps.target.outputs.server }}'
+          $database = '${{ steps.target.outputs.database }}'
+          $token    = '${{ steps.token.outputs.value }}'
+
+          # 8 attempts backing off 15s to 60s covers ~5 minutes, comfortably
+          # more than a serverless resume, and stops rather than hanging a job
+          # for an hour if the database is genuinely unreachable.
+          $max = 8
+          for ($attempt = 1; $attempt -le $max; $attempt++) {
+              try {
+                  $r = Invoke-Sqlcmd -ServerInstance $server -Database $database `
+                                     -AccessToken $token `
+                                     -Query 'SELECT DatabaseState = DATABASEPROPERTYEX(DB_NAME(), ''Status'');' `
+                                     -ConnectionTimeout 60 -QueryTimeout 120 -ErrorAction Stop
+                  Write-Host "    $database is $($r.DatabaseState) - awake after $attempt attempt(s)."
+                  exit 0
+              }
+              catch {
+                  $message = $_.Exception.Message
+                  if ($attempt -eq $max) {
+                      Write-Host "::error::$database did not come online after $max attempts. Last error: $message"
+                      throw
+                  }
+                  $delay = [math]::Min(60, 15 * $attempt)
+                  Write-Host "    attempt $attempt/$max - $message"
+                  Write-Host "    resuming; waiting ${delay}s"
+                  Start-Sleep -Seconds $delay
+              }
+          }
+
+      # -----------------------------------------------------------------------
       # 1. What would change?
       # -----------------------------------------------------------------------
       - name: DeployReport
