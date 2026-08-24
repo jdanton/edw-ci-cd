@@ -79,6 +79,10 @@ SELECT
     src.tollsAmount,
     src.totalAmount,
 
+    /* ADDED. The TLC records this only from 2019 onward, so it is NULL for
+       every earlier partition - see the WITH clause below. */
+    src.congestionSurcharge,
+
     /* Lineage. filename() is the Parquet part file the row came from - the
        single most useful column when someone disputes a number. */
     SourceFileName = src.filename()
@@ -104,7 +108,17 @@ FROM OPENROWSET(
         improvementSurcharge VARCHAR(20)   ,
         tipAmount            FLOAT         ,
         tollsAmount          FLOAT         ,
-        totalAmount          FLOAT
+        totalAmount          FLOAT         ,
+
+        /* ADDED. Nullable, and it has to be: the congestion surcharge did not
+           exist before 2019, so those Parquet files have no such column.
+           Naming it in an explicit WITH clause is what makes that safe -
+           serverless returns NULL for a column a file does not contain,
+           rather than failing the read. Adding a column here is therefore
+           backward compatible across every historical partition.
+
+           RENAMING or RETYPING one is not, and breaks all of them at once. */
+        congestionSurcharge  FLOAT
      ) AS src;
 GO
 

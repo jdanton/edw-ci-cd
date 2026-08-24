@@ -174,6 +174,7 @@ SELECT
     , TipAmount
     , TollsAmount
     , TotalAmount
+    , CongestionSurchargeAmount
     , SourceFileName
     , CuratedAtUtc
 FROM (
@@ -213,6 +214,13 @@ FROM (
         , TipAmount                  = TRY_CAST(r.tipAmount AS DECIMAL(10,2))
         , TollsAmount                = TRY_CAST(r.tollsAmount AS DECIMAL(10,2))
         , TotalAmount                = TRY_CAST(r.totalAmount AS DECIMAL(10,2))
+
+        /* ADDED. DECIMAL(10,2), not FLOAT, for the reason in the file header:
+           a double cannot represent 0.10 exactly, so summing millions of them
+           gives a total that differs run to run in the last decimal place.
+           NULL for pre-2019 partitions, which is honest - the charge did not
+           exist yet. */
+        , CongestionSurchargeAmount  = TRY_CAST(r.congestionSurcharge AS DECIMAL(10,2))
 
         , SourceFileName = r.SourceFileName
         , CuratedAtUtc   = SYSUTCDATETIME()

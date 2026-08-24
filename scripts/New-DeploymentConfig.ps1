@@ -246,7 +246,11 @@ function Merge-ConfigCsv {
         if ($generatedKeys.ContainsKey($key)) {
             if ($row.value -ne $generatedKeys[$key]) {
                 $conflicts += [pscustomobject]@{
-                    File      = Split-Path $CommittedPath -Leaf
+                    # Repo-relative, NOT the leaf. There is a config-dev.csv
+                    # under both src/adf/deployment and src/synapse/deployment,
+                    # so a bare "config-dev.csv" sends whoever reads this
+                    # failure to the wrong file - which is exactly what it did.
+                    File      = [IO.Path]::GetRelativePath($RepositoryRoot, $CommittedPath)
                     Key       = $key
                     Committed = $row.value
                     Actual    = $generatedKeys[$key]

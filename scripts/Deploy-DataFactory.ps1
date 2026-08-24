@@ -59,6 +59,7 @@ $ErrorActionPreference = 'Stop'
 
 function Write-Step { param([string]$m) Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$m) Write-Host "    $m" -ForegroundColor Green }
+function Write-Warn { param([string]$m) Write-Host "    !! $m" -ForegroundColor Yellow }
 
 $adfRoot      = Join-Path $RepositoryRoot 'src' 'adf'
 $deploymentDir = Join-Path $adfRoot 'deployment'
@@ -222,6 +223,30 @@ $opt.FailsWhenPathNotFound       = $true
 Write-Ok "deleteNotInSource=$($opt.DeleteNotInSource)  stopStartTriggers=$($opt.StopStartTriggers)"
 
 # ---------------------------------------------------------------------------
+# stopStartTriggers is not merely recommended - refuse to run without it.
+#
+# ADF will not modify a pipeline that a STARTED trigger references. With this
+# off, a deployment does not fail cleanly: it publishes the artifacts it can
+# and fails on the ones a running trigger holds, leaving the factory half
+# updated. That is the worst of the three possible outcomes.
+#
+# publish-options.json documents it as mandatory; this makes it so, rather
+# than trusting that nobody edits the environment block.
+# ---------------------------------------------------------------------------
+if (-not $opt.StopStartTriggers) {
+    throw @"
+stopStartTriggers is false for environment '$Environment'.
+
+ADF refuses to modify a pipeline referenced by a running trigger, so this
+setting leaves the factory half-published rather than failing cleanly.
+
+Set it back to true in src/adf/deployment/publish-options.json. If you are
+deliberately deploying to a factory with no triggers at all, delete the
+trigger artifacts instead of disabling this.
+"@
+}
+
+# ---------------------------------------------------------------------------
 # 5. Publish
 # ---------------------------------------------------------------------------
 
@@ -248,8 +273,127 @@ if (-not $PSCmdlet.ShouldProcess($dataFactoryName, 'Publish ADF artifacts')) {
     exit 0
 }
 
+# ---------------------------------------------------------------------------
+# Which triggers is this environment supposed to leave RUNNING?
+#
+# The config CSV is the declaration - a `trigger,<name>,runtimeState,Started`
+# row. Captured BEFORE publishing because it is also what we restore from if
+# the publish dies half way through.
+# ---------------------------------------------------------------------------
+$declaredStarted = @(
+    Import-Csv $configPath |
+        Where-Object { $_.type -eq 'trigger' -and $_.path -eq 'runtimeState' -and $_.value -eq 'Started' } |
+        ForEach-Object { $_.name }
+)
+
+function Expand-DeclaredTriggerName {
+    param(
+        [string[]] $Names,
+        [string[]] $Candidates
+    )
+
+    $expanded = foreach ($name in $Names) {
+        if ([System.Management.Automation.WildcardPattern]::ContainsWildcardCharacters($name)) {
+            $Candidates | Where-Object { $_ -like $name }
+        }
+        else {
+            $name
+        }
+    }
+
+    return @($expanded | Sort-Object -Unique)
+}
+
+$sourceTriggerNames = @(
+    Get-ChildItem -Path (Join-Path $adfRoot 'trigger') -Filter *.json -File -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.BaseName }
+)
+
+$liveTriggerNames = @()
+try {
+    $liveTriggerNames = @(
+        Get-AzDataFactoryV2Trigger -ResourceGroupName $resourceGroupName `
+            -DataFactoryName $dataFactoryName -ErrorAction Stop |
+            ForEach-Object { $_.Name }
+    )
+}
+catch {
+    Write-Warn "Could not read live triggers for wildcard expansion: $($_.Exception.Message)"
+}
+
+$triggerNameCandidates = @(
+    @($sourceTriggerNames + $liveTriggerNames) |
+        Where-Object { $_ } |
+        Sort-Object -Unique
+)
+
+$shouldBeStarted = Expand-DeclaredTriggerName -Names $declaredStarted -Candidates $triggerNameCandidates
+
+function Start-DeclaredTrigger {
+    <#
+        Restart every trigger this environment declares as Started, reporting
+        each one. Used on the failure path, where the module has already
+        stopped them and will not get to its own restart step.
+    #>
+    param([string[]] $Names)
+
+    $failed = @()
+    foreach ($name in $Names) {
+        try {
+            Start-AzDataFactoryV2Trigger -ResourceGroupName $resourceGroupName `
+                -DataFactoryName $dataFactoryName -Name $name -Force -ErrorAction Stop | Out-Null
+            Write-Ok "restarted trigger $name"
+        }
+        catch {
+            Write-Warn "could NOT restart trigger ${name}: $($_.Exception.Message)"
+            $failed += $name
+        }
+    }
+    return , $failed
+}
+
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-Publish-AdfV2FromJson @publishParams
+
+# ---------------------------------------------------------------------------
+# The publish is wrapped because of what StopStartTriggers does on failure:
+# NOTHING. The module stops every trigger, publishes, then restarts them. If
+# the publish throws in between - a bad config path, a transient 429, an
+# artifact referencing a linked service that does not exist yet - it never
+# reaches the restart, and the triggers stay STOPPED.
+#
+# That failure is silent and expensive. The workflow goes red, somebody fixes
+# the artifact and redeploys tomorrow, and in between the platform quietly
+# ingests nothing. Nobody is paged, because nothing errored - the schedule
+# simply never fired.
+#
+# So: on failure, put the triggers back the way the environment declares them,
+# THEN rethrow. The deployment still fails, loudly and with its original
+# error; it just does not leave ingestion switched off behind it.
+# ---------------------------------------------------------------------------
+try {
+    Publish-AdfV2FromJson @publishParams
+}
+catch {
+    $publishError = $_
+    Write-Host ''
+    Write-Warn 'Publish FAILED. Restoring trigger state before exiting.'
+
+    if ($shouldBeStarted.Count -gt 0) {
+        $couldNotStart = Start-DeclaredTrigger -Names $shouldBeStarted
+        if ($couldNotStart.Count -gt 0) {
+            Write-Host ''
+            Write-Host 'THESE TRIGGERS ARE STILL STOPPED AND MUST BE STARTED BY HAND:' -ForegroundColor Red
+            $couldNotStart | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+            Write-Host '  az datafactory trigger start --factory-name' $dataFactoryName '-g' $resourceGroupName '--name <trigger>' -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Ok 'No triggers are declared Started in this environment - nothing to restore.'
+    }
+
+    throw $publishError
+}
+
 $stopwatch.Stop()
 
 Write-Ok "Published in $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s."
@@ -258,9 +402,58 @@ Write-Ok "Published in $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s."
 # 6. Job summary
 # ---------------------------------------------------------------------------
 
-if ($env:GITHUB_STEP_SUMMARY) {
-    $triggerRows = Import-Csv $configPath | Where-Object { $_.type -eq 'trigger' -and $_.path -eq 'runtimeState' }
+# ---------------------------------------------------------------------------
+# Verify the triggers actually came back up.
+#
+# This used to report the CSV - that is the INTENT, not the outcome, so the
+# summary said "Started" whether or not anything was running. The whole point
+# of the table is to answer "is ingestion on?", so it has to ask Azure.
+# ---------------------------------------------------------------------------
+Write-Step 'Verifying trigger state.'
 
+$triggerState = @()
+$notRunning   = @()
+$mismatches   = @()
+try {
+    $liveTriggers = Get-AzDataFactoryV2Trigger -ResourceGroupName $resourceGroupName `
+        -DataFactoryName $dataFactoryName -ErrorAction Stop
+
+    foreach ($trigger in $liveTriggers) {
+        $expected = if ($shouldBeStarted -contains $trigger.Name) { 'Started' } else { 'Stopped' }
+        $actual   = $trigger.RuntimeState
+
+        $triggerState += [pscustomobject]@{
+            Name = $trigger.Name; Expected = $expected; Actual = $actual
+            Ok   = ($expected -eq $actual)
+        }
+
+        if ($expected -ne $actual) {
+            $mismatches += $trigger.Name
+
+            if ($expected -eq 'Started') {
+                $notRunning += $trigger.Name
+            }
+
+            Write-Warn "$($trigger.Name) should be $expected but is $actual"
+        }
+        else {
+            Write-Ok "$($trigger.Name): $actual"
+        }
+    }
+}
+catch {
+    Write-Warn "Could not read trigger state: $($_.Exception.Message)"
+}
+
+if ($notRunning.Count -gt 0) {
+    Write-Host ''
+    Write-Host 'A trigger that should be running is not. Ingestion is OFF for it.' -ForegroundColor Red
+    $notRunning | ForEach-Object {
+        Write-Host "  az datafactory trigger start --factory-name $dataFactoryName -g $resourceGroupName --name $_" -ForegroundColor Yellow
+    }
+}
+
+if ($env:GITHUB_STEP_SUMMARY) {
     $summary = @"
 ## Data Factory deployment - ``$Environment``
 
@@ -274,14 +467,33 @@ if ($env:GITHUB_STEP_SUMMARY) {
 
 ### Trigger state after this deployment
 
-| Trigger | State |
-|---|---|
-$(($triggerRows | ForEach-Object { "| ``$($_.name)`` | $($_.value) |" }) -join "`n")
+Read from Azure, not from the config - this is what is actually running.
+
+| Trigger | Expected | Actual | |
+|---|---|---|---|
+$(if ($triggerState.Count -gt 0) {
+    ($triggerState | ForEach-Object {
+        "| ``$($_.Name)`` | $($_.Expected) | $($_.Actual) | $(if ($_.Ok) { 'OK' } else { '**MISMATCH**' }) |"
+    }) -join "`n"
+} else {
+    "| _trigger state could not be read_ | | | |"
+})
+$(if ($notRunning.Count -gt 0) {
+"`n> **A trigger that should be running is stopped, so ingestion is OFF for it.**`n> Start it with:`n> ``````
+> az datafactory trigger start --factory-name $dataFactoryName -g $resourceGroupName --name <trigger>
+> ``````"
+})
 
 > Triggers are stopped before publishing and restarted afterwards - ADF refuses
-> to modify a pipeline referenced by a running trigger.
+> to modify a pipeline referenced by a running trigger. If the publish fails in
+> between, this script restarts them before rethrowing, so a failed deployment
+> does not leave ingestion silently switched off.
 "@
     $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+}
+
+if ($mismatches.Count -gt 0) {
+    throw "Trigger verification failed for $($mismatches.Count) trigger(s). See summary for mismatches."
 }
 
 Write-Step 'Data Factory deployment complete.'

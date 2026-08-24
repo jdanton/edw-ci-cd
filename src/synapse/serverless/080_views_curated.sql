@@ -71,6 +71,7 @@ SELECT
     c.TipAmount,
     c.TollsAmount,
     c.TotalAmount,
+    c.CongestionSurchargeAmount,
     c.SourceFileName,
     c.CuratedAtUtc
 FROM OPENROWSET(
@@ -99,6 +100,9 @@ FROM OPENROWSET(
         TipAmount                  DECIMAL(10,2),
         TollsAmount                DECIMAL(10,2),
         TotalAmount                DECIMAL(10,2),
+        /* ADDED. NULL for curated partitions written before this column
+           existed, until data-backfill.yml rebuilds them. */
+        CongestionSurchargeAmount  DECIMAL(10,2),
         SourceFileName             VARCHAR(400) ,
         CuratedAtUtc               DATETIME2(7)
      ) AS c;
