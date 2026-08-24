@@ -99,7 +99,16 @@ jobs:
           }
           Import-Module azure.datafactory.tools -RequiredVersion '${{ env.ADF_TOOLS_VERSION }}' -Force
 
-          $result = Test-AdfCode -RootFolder src/adf
+          # -ConfigPath is not optional here. Left to itself, Test-AdfCode globs
+          # <RootFolder>/deployment/* for *.csv AND *.json and validates every
+          # match as one of ITS config files - every top-level property is read
+          # as an artifact name to patch. publish-options.json is OUR schema,
+          # consumed by scripts/Deploy-DataFactory.ps1, so the first property it
+          # meets fails with "ADFT0017: Object [$comment] could not be found."
+          # Naming the CSVs explicitly keeps the config validation on the files
+          # that are actually config files.
+          $result = Test-AdfCode -RootFolder src/adf `
+                                 -ConfigPath 'src/adf/deployment/config-*.csv'
 
           if ($result -and $result.ErrorCount -gt 0) {
             Write-Host "::error::Test-AdfCode reported $($result.ErrorCount) error(s)."

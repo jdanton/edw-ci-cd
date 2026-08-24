@@ -50,12 +50,35 @@ src/adf/
                    PL_Curate_NycTaxi_Yellow, PL_Load_Sql_YellowTrip,
                    PL_Backfill_NycTaxi_Yellow
   trigger/         TR_Monthly_NycTaxi_Load, TR_Tumbling_NycTaxi_Reprocess
+  integrationRuntime/  IR-ManagedVNet          (placeholder - see below)
   deployment/      config-<env>.csv, publish-options.json, README.md
 ```
 
-Note what is **absent**: `integrationRuntime/` and `managedVirtualNetwork/`.
-Terraform owns those. See
+Terraform owns the integration runtime and the managed VNet. See
 [00-architecture](00-architecture.md#terraform-owns-infrastructure-the-azure-player-tools-own-code).
+
+`integrationRuntime/IR-ManagedVNet.json` is nevertheless present, and is a
+**placeholder that is never deployed** — `publish-options.json` excludes
+`integrationRuntime.*`. It exists because every linked service pins
+`connectVia: IR-ManagedVNet`, and azure.datafactory.tools resolves references
+against the source folder only. With no file there:
+
+- `Test-AdfCode` reports one `Couldn't find referenced object
+  IntegrationRuntime.IR-ManagedVNet` per linked service — five errors, and the
+  validate job fails;
+- `Publish-AdfV2FromJson` then fails with `ADFT0005: Referenced object
+  [IntegrationRuntime].[IR-ManagedVNet] was not found` before deploying
+  anything, because `Deploy-AdfObject` walks dependencies before the object
+  itself and the module's `IgnoreLackOfReferencedObject` option defaults to
+  false.
+
+That the runtime already exists in the live factory does not help: the check is
+static, against the folder. `managedVirtualNetwork/` stays absent because
+nothing in `src/adf` references it by name.
+
+Keep the placeholder's `name` identical to `var.managed_vnet_ir_name`. It
+carries no compute settings — those live in Terraform, and a second copy would
+drift.
 
 ---
 

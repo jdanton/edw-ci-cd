@@ -1,0 +1,7 @@
+{
+    "name": "IR-ManagedVNet",
+    "properties": {
+        "type": "Managed",
+        "description": "PLACEHOLDER - NOT DEPLOYED FROM HERE. Terraform owns this integration runtime (infra/terraform/modules/datafactory/main.tf, var.managed_vnet_ir_name) and publish-options.json excludes integrationRuntime.*, so azure.datafactory.tools never creates, updates or deletes it. The file exists solely so that the connectVia reference in all five linked services RESOLVES: without it Test-AdfCode reports five 'Couldn't find referenced object IntegrationRuntime.IR-ManagedVNet' errors, and Publish-AdfV2FromJson fails with ADFT0005 before it deploys anything. Only `name` is load-bearing and it must match var.managed_vnet_ir_name. compute type, core count and time-to-live are deliberately NOT repeated here - they live in Terraform, and a second copy would silently drift. The managedVirtualNetwork reference block that ADF Studio writes at this position is omitted for the same reason it would need its own placeholder: it would add a dangling reference to managedVirtualNetwork.default, which Terraform also owns."
+    }
+}

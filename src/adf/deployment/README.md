@@ -104,5 +104,22 @@ shaped and must exist *before* any linked service that references
 If you ever see Terraform and the ADF pipeline flip-flopping an integration
 runtime on alternate deployments, that exclusion is what has gone missing.
 
+`../integrationRuntime/IR-ManagedVNet.json` exists anyway, as a placeholder the
+exclusion keeps out of every deployment. The module resolves `connectVia`
+references against the source folder, not against the live factory, so without
+that file `Test-AdfCode` fails with five missing-reference errors and
+`Publish-AdfV2FromJson` fails with `ADFT0005` before deploying anything. It is
+also what keeps `deleteNotInSource: true` honest: the runtime is now *in*
+source, so it cannot be considered an orphan. (The exclusion alone would already
+protect it — `DoNotDeleteExcludedObjects` defaults to true — but relying on a
+default nobody sets is thinner cover than the file.)
+
+`publish-options.json` itself must be kept out of the module's config-file
+validation, which globs `deployment/*.csv` and `deployment/*.json`: it uses our
+schema, not the module's, and each top-level property would be read as an
+artifact name to patch. `adf-cd.yml` passes
+`-ConfigPath 'src/adf/deployment/config-*.csv'` to `Test-AdfCode` for exactly
+this reason. Without it you get `ADFT0017: Object [$comment] could not be found.`
+
 See the long comment at the top of
 `infra/terraform/modules/datafactory/main.tf` for the full ownership table.
