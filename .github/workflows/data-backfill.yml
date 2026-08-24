@@ -148,6 +148,27 @@ jobs:
           terraform init -reconfigure -no-color \
             -backend-config=envs/${{ inputs.environment }}/backend.hcl
 
+      # Deliberately an ERROR here, not a skip.
+      #
+      # The CD workflows skip environments that do not exist, because a push to
+      # main is not a request to deploy anywhere in particular and two red jobs
+      # for absent environments teach people to ignore red. This workflow is the
+      # opposite: somebody chose this environment and asked for data to be
+      # loaded into it. Reporting success for work that cannot happen would be
+      # worse than failing - so fail, immediately, saying which thing is missing
+      # rather than letting Test-PlatformConnectivity report an unresolvable
+      # hostname a minute later.
+      - name: Confirm the environment exists
+        working-directory: infra/terraform
+        run: |
+          set -euo pipefail
+          count=$(terraform state list 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$count" = "0" ]; then
+            echo "::error::Environment '${{ inputs.environment }}' has no infrastructure - its Terraform state is empty. Run infra-cd for ${{ inputs.environment }} first, then synapse-cd, adf-cd and sql-cd. There is nothing to load data into yet."
+            exit 1
+          fi
+          echo "${{ inputs.environment }}: $count resource(s) in state."
+
       - name: Verify connectivity
         shell: pwsh
         run: ./scripts/Test-PlatformConnectivity.ps1 -Environment ${{ inputs.environment }}

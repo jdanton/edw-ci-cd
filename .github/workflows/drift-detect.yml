@@ -45,15 +45,117 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Which environments actually exist?
+  #
+  # test and prod have no infrastructure until infra-cd has run for them, and
+  # every deployment job aimed at a missing environment fails on its first
+  # Terraform read - so a normal push to main goes green on dev and then reports
+  # two failures for environments nobody has created yet. That trains people to
+  # ignore red, which is worse than the missing environments.
+  #
+  # This runs as the READ-ONLY CI identity: it needs no `environment:` block,
+  # and its OIDC subject on main is repo:<owner>/<repo>:ref:refs/heads/main,
+  # which bootstrap federates for exactly this kind of job.
+  #
+  # It FAILS OPEN. An environment is reported missing only on positive evidence
+  # - the backend initialised and the state holds zero resources. If the check
+  # itself cannot run, every environment is reported present and the deployment
+  # jobs behave exactly as they did before this job existed. A broken probe must
+  # never be able to silently skip a production deployment.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Which environments exist?
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
+    timeout-minutes: 10
+
+    outputs:
+      dev:  ${{ steps.check.outputs.dev }}
+      test: ${{ steps.check.outputs.test }}
+      prod: ${{ steps.check.outputs.prod }}
+      matrix: ${{ steps.check.outputs.matrix }}
+
+    env:
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CI_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CI_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        # A probe that cannot log in must not be able to skip anything. Failing
+        # here leaves the outputs unset, and every environment stays in the
+        # matrix exactly as it was before this job existed.
+        continue-on-error: true
+
+      - name: Read each environment's state
+        id: check
+        working-directory: infra/terraform
+        run: |
+          set -uo pipefail
+          present=''
+          for env in dev test prod; do
+            deployed=true
+            reason='probe failed - assuming it exists'
+            if terraform init -reconfigure -no-color -backend-config="envs/$env/backend.hcl" >/dev/null 2>&1; then
+              count=$(terraform state list 2>/dev/null | wc -l | tr -d ' ')
+              if [ "$count" = "0" ]; then
+                deployed=false
+                reason='no resources in state - not deployed yet'
+              else
+                reason="$count resource(s) in state"
+              fi
+            fi
+            echo "$env=$deployed" >> "$GITHUB_OUTPUT"
+            printf '%-5s deployed=%-5s (%s)\n' "$env" "$deployed" "$reason"
+            if [ "$deployed" = "true" ]; then present="${present}\"$env\","; fi
+          done
+
+          # Planning an environment with no state is not drift detection - it
+          # reports every resource as "to be created" and raises an issue about
+          # infrastructure nobody has asked for yet.
+          echo "matrix=[${present%,}]" >> "$GITHUB_OUTPUT"
+          echo "matrix: [${present%,}]"
+
+      - name: Summary
+        run: |
+          {
+            echo '## Environments'
+            echo
+            echo '| Environment | Deployed |'
+            echo '|---|---|'
+            echo '| dev | ${{ steps.check.outputs.dev }} |'
+            echo '| test | ${{ steps.check.outputs.test }} |'
+            echo '| prod | ${{ steps.check.outputs.prod }} |'
+            echo
+            echo 'Jobs for an environment that does not exist are skipped, not failed.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   detect:
     name: Plan ${{ matrix.environment }}
     runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
     timeout-minutes: 30
 
+    needs: [preflight]
+    # An empty matrix is not a valid strategy, so the job is skipped outright
+    # when nothing is deployed.
+    if: needs.preflight.outputs.matrix != '[]'
+
     strategy:
       fail-fast: false      # report drift in every environment, not just the first
       matrix:
-        environment: [dev, test, prod]
+        environment: ${{ fromJSON(needs.preflight.outputs.matrix) }}
 
     # The federated credential for test and prod includes a
     # `ref:refs/heads/main` subject precisely so that scheduled runs like this

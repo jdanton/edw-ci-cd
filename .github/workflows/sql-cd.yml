@@ -68,6 +68,94 @@ env:
 
 jobs:
 
+  # ---------------------------------------------------------------------------
+  # Which environments actually exist?
+  #
+  # test and prod have no infrastructure until infra-cd has run for them, and
+  # every deployment job aimed at a missing environment fails on its first
+  # Terraform read - so a normal push to main goes green on dev and then reports
+  # two failures for environments nobody has created yet. That trains people to
+  # ignore red, which is worse than the missing environments.
+  #
+  # This runs as the READ-ONLY CI identity: it needs no `environment:` block,
+  # and its OIDC subject on main is repo:<owner>/<repo>:ref:refs/heads/main,
+  # which bootstrap federates for exactly this kind of job.
+  #
+  # It FAILS OPEN. An environment is reported missing only on positive evidence
+  # - the backend initialised and the state holds zero resources. If the check
+  # itself cannot run, every environment is reported present and the deployment
+  # jobs behave exactly as they did before this job existed. A broken probe must
+  # never be able to silently skip a production deployment.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Which environments exist?
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
+    timeout-minutes: 10
+
+    outputs:
+      dev:  ${{ steps.check.outputs.dev }}
+      test: ${{ steps.check.outputs.test }}
+      prod: ${{ steps.check.outputs.prod }}
+
+    env:
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CI_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CI_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        # A probe that cannot log in must not be able to skip a deployment.
+        # Failing here leaves every output unset, which the gates below read as
+        # "assume it exists".
+        continue-on-error: true
+
+      - name: Read each environment's state
+        id: check
+        working-directory: infra/terraform
+        run: |
+          set -uo pipefail
+          for env in dev test prod; do
+            deployed=true
+            reason='probe failed - assuming it exists'
+            if terraform init -reconfigure -no-color -backend-config="envs/$env/backend.hcl" >/dev/null 2>&1; then
+              count=$(terraform state list 2>/dev/null | wc -l | tr -d ' ')
+              if [ "$count" = "0" ]; then
+                deployed=false
+                reason='no resources in state - not deployed yet'
+              else
+                reason="$count resource(s) in state"
+              fi
+            fi
+            echo "$env=$deployed" >> "$GITHUB_OUTPUT"
+            printf '%-5s deployed=%-5s (%s)\n' "$env" "$deployed" "$reason"
+          done
+
+      - name: Summary
+        run: |
+          {
+            echo '## Environments'
+            echo
+            echo '| Environment | Deployed |'
+            echo '|---|---|'
+            echo '| dev | ${{ steps.check.outputs.dev }} |'
+            echo '| test | ${{ steps.check.outputs.test }} |'
+            echo '| prod | ${{ steps.check.outputs.prod }} |'
+            echo
+            echo 'Jobs for an environment that does not exist are skipped, not failed.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build:
     name: Build DACPAC
     runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
@@ -144,18 +232,45 @@ jobs:
           environment below will deploy. Nothing is rebuilt per environment.
           "@
 
+      # Stage a FLAT directory before uploading.
+      #
+      # upload-artifact@v4 roots the archive at the least common ancestor of
+      # everything it matches. Listing the dacpac (bin/Release/) and the publish
+      # profiles (Properties/) as two patterns makes that root the project
+      # directory, so the artifact carries bin/Release/EdwTaxi.Database.dacpac
+      # and Properties/EdwTaxi.Database.<env>.publish.xml - and _sql-publish.yml,
+      # which downloads into dacpac/ and expects both files directly there,
+      # fails with
+      #
+      #   Error parsing connection string: Could not find file
+      #   '.../dacpac/EdwTaxi.Database.dev.publish.xml'
+      #
+      # naming the profile rather than the layout. Flattening here keeps the
+      # surprise in one place instead of in five sqlpackage arguments.
+      - name: Stage the publish bundle
+        run: |
+          set -euo pipefail
+          mkdir -p publish-bundle
+          cp src/sql/EdwTaxi.Database/bin/Release/*.dacpac        publish-bundle/
+          cp src/sql/EdwTaxi.Database/Properties/*.publish.xml    publish-bundle/
+          ls -l publish-bundle
+
       - uses: actions/upload-artifact@v4
         with:
           name: dacpac
-          path: |
-            src/sql/EdwTaxi.Database/bin/Release/*.dacpac
-            src/sql/EdwTaxi.Database/Properties/*.publish.xml
+          path: publish-bundle/
           retention-days: 90
 
   dev:
     name: Publish to dev
-    needs: [build]
-    if: github.event_name == 'push' || inputs.environment == 'all' || inputs.environment == 'dev'
+    needs: [build, preflight]
+    if: |
+      needs.preflight.outputs.dev != 'false' &&
+      (
+        github.event_name == 'push' ||
+        inputs.environment == 'all' ||
+        inputs.environment == 'dev'
+      )
     uses: ./.github/workflows/_sql-publish.yml
     with:
       environment: dev
@@ -164,7 +279,7 @@ jobs:
 
   test:
     name: Publish to test
-    needs: [dev]
+    needs: [dev, preflight]
     # `skipped` is accepted ONLY when the operator explicitly targeted this
     # environment alone. Accepting it unconditionally is what let prod deploy
     # after dev FAILED: dev failed -> test skipped -> prod saw "skipped" and
@@ -175,6 +290,7 @@ jobs:
     # skipped, which only happens when they were never selected.
     if: |
       always() &&
+      needs.preflight.outputs.test != 'false' &&
       (
         ((github.event_name == 'push' || inputs.environment == 'all') &&
           needs.dev.result == 'success')
@@ -189,7 +305,7 @@ jobs:
 
   prod:
     name: Publish to prod
-    needs: [dev, test]
+    needs: [dev, test, preflight]
     # `skipped` is accepted ONLY when the operator explicitly targeted this
     # environment alone. Accepting it unconditionally is what let prod deploy
     # after dev FAILED: dev failed -> test skipped -> prod saw "skipped" and
@@ -200,6 +316,7 @@ jobs:
     # skipped, which only happens when they were never selected.
     if: |
       always() &&
+      needs.preflight.outputs.prod != 'false' &&
       (
         ((github.event_name == 'push' || inputs.environment == 'all') &&
           needs.dev.result == 'success' && needs.test.result == 'success')
