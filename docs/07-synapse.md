@@ -355,6 +355,26 @@ Deployment stops at the first failure rather than continuing, because
 continuing past a missing external data source produces a cascade of errors that
 obscure the real one.
 
+### `workspace/integrationRuntime/AutoResolveIntegrationRuntime.json`
+
+A placeholder, never deployed — `publish-options.json` excludes
+`integrationRuntime.*`. Azure creates `AutoResolveIntegrationRuntime` with the
+workspace; nothing here manages it, and Terraform only sets
+`managed_virtual_network_enabled`.
+
+It exists because `azure.synapse.tools` resolves `connectVia` references
+against the **source folder**, not the live workspace. `LS_ADLS_Lake` names the
+runtime, so without the file the publish fails with
+
+```
+ASWT0005: Referenced object [IntegrationRuntime].[AutoResolveIntegrationRuntime] was not found.
+```
+
+— after the triggers have been stopped. Same mechanism as
+`integrationRuntime/IR-ManagedVNet.json` on the Data Factory side
+([06-data-factory](06-data-factory.md)); the difference is only who owns the
+runtime, Azure here and Terraform there.
+
 ---
 
 ## Adding an entity

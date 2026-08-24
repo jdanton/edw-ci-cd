@@ -22,7 +22,13 @@
         "scripts/Deploy-ServerlessSql.ps1 over TDS, as a separate step in",
         ".github/workflows/synapse-cd.yml.",
         "",
-        "Option semantics mirror the ADF module - see src/adf/deployment/publish-options.json."
+        "Option semantics mirror the ADF module - see src/adf/deployment/publish-options.json.",
+        "",
+        "The integrationRuntime.* exclusion is load-bearing in one non-obvious way:",
+        "../workspace/integrationRuntime/AutoResolveIntegrationRuntime.json exists so that",
+        "the connectVia reference in LS_ADLS_Lake RESOLVES - the module resolves references",
+        "against the source folder, not the live workspace - and this exclusion is what keeps",
+        "that placeholder from ever being sent to Azure. Remove one and you break the other."
     ],
     "default": {
         "excludes": [

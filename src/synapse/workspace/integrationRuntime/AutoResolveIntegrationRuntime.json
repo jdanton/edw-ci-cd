@@ -1,0 +1,7 @@
+{
+    "name": "AutoResolveIntegrationRuntime",
+    "properties": {
+        "type": "Managed",
+        "description": "PLACEHOLDER - NOT DEPLOYED FROM HERE, AND NOT DEPLOYABLE ANYWHERE. AutoResolveIntegrationRuntime is the integration runtime every Synapse workspace is born with: nobody creates it, nobody can delete it, and Terraform does not manage it (the workspace only sets managed_virtual_network_enabled). It is here because azure.synapse.tools resolves connectVia references against the SOURCE FOLDER rather than the live workspace, so a linked service naming it fails with 'ASWT0005: Referenced object [IntegrationRuntime].[AutoResolveIntegrationRuntime] was not found' - during deployment, after the triggers have been stopped. publish-options.json excludes integrationRuntime.*, so this file is never sent to the workspace. Any future artifact exported from Studio that names this runtime will resolve against it too. No compute settings are recorded: Azure owns them, and a copy here could only ever be wrong."
+    }
+}

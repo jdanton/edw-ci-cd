@@ -632,6 +632,33 @@ az synapse workspace delete -n <workspace> -g <rg> --yes
 Do not simply re-run the apply against it - Terraform will attempt an update,
 which also fails, and you lose another 30 minutes.
 
+### `ASWT0005: Referenced object [IntegrationRuntime].[AutoResolveIntegrationRuntime] was not found` {#aswt0005-autoresolve}
+
+```
+STEP: Deployment of all Synapse objects...
+Start deploying object: [linkedService].[LS_ADLS_Lake] (1 dependency/ies)
+     | ASWT0005: Referenced object
+     | [IntegrationRuntime].[AutoResolveIntegrationRuntime] was not found.
+```
+
+The runtime exists in the workspace — Azure puts it there. The module resolves
+`connectVia` against the **source folder**, so it needs a file. Restore
+`src/synapse/workspace/integrationRuntime/AutoResolveIntegrationRuntime.json`;
+it is a placeholder that `publish-options.json` excludes from every deployment.
+The Data Factory equivalent is [`ADFT0005`](#new-azresource-missing)'s
+neighbour, `integrationRuntime/IR-ManagedVNet.json`.
+
+Two things in that log that are **not** problems:
+
+- `# Number of objects marked as to be deployed: 1/3` followed by a single
+  artifact. `ToBeDeployedStat` pipes through `Select-Object -Unique`, which
+  compares objects by type name and collapses them. All three are deployed.
+- `Getting triggers...` returning nothing. There are no Synapse triggers in
+  this template; the ADF factory owns scheduling.
+
+The failure lands after `STEP: Stopping triggers...`, so check trigger state
+once the deployment succeeds.
+
 ### `azure.synapse.tools` hangs
 
 The Dev endpoint is private. Check
