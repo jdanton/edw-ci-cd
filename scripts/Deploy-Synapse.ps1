@@ -42,7 +42,10 @@ param(
 
     [string] $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
 
-    [string] $ModuleVersion = '1.6.0',
+    # Newest azure.synapse.tools on the PowerShell Gallery. The module has
+    # never published a 1.x, and a pin it cannot resolve fails as "No match
+    # was found for the specified search criteria", not as a version error.
+    [string] $ModuleVersion = '0.27.0',
 
     [switch] $SkipConfigGeneration
 )
@@ -137,10 +140,34 @@ $opt = New-SynapsePublishOption
 foreach ($pattern in $effective['excludes']) { $opt.Excludes.Add($pattern, '') }
 foreach ($pattern in $effective['includes']) { $opt.Includes.Add($pattern, '') }
 
-$opt.DeleteNotInSource = [bool]$effective['deleteNotInSource']
-$opt.StopStartTriggers = [bool]$effective['stopStartTriggers']
-$opt.CreateNewInstance = [bool]$effective['createNewInstance']
-$opt.IgnoreLogsAtEnd   = [bool]$effective['ignoreLogsAtEnd']
+# Same translation guard as Deploy-DataFactory.ps1: the option object is a
+# PowerShell class, so assigning a property the installed version does not
+# define throws an error naming the module's property and nothing else.
+$optionMap = [ordered]@{
+    deleteNotInSource = 'DeleteNotInSource'
+    stopStartTriggers = 'StopStartTriggers'
+    createNewInstance = 'CreateNewInstance'
+}
+
+$supported = ($opt | Get-Member -MemberType Property).Name
+
+foreach ($key in $optionMap.Keys) {
+    if (-not $effective.ContainsKey($key)) { continue }
+    $property = $optionMap[$key]
+    if ($supported -notcontains $property) {
+        throw ("azure.synapse.tools $ModuleVersion has no publish option " +
+               "'$property' (from '$key' in publish-options.json). It accepts: " +
+               ($supported -join ', ') + '.')
+    }
+    $opt.$property = [bool]$effective[$key]
+}
+
+$known    = @('excludes', 'includes') + [string[]]$optionMap.Keys
+$unmapped = $effective.Keys | Where-Object { $_ -notin $known }
+if ($unmapped) {
+    throw ("publish-options.json sets option(s) this script does not translate: " +
+           ($unmapped -join ', ') + '. Known keys: ' + ($known -join ', ') + '.')
+}
 
 if ($opt.PSObject.Properties.Name -contains 'FailsWhenConfigItemNotFound') {
     $opt.FailsWhenConfigItemNotFound = $true

@@ -22,7 +22,7 @@ PowerShell modules (the scripts install them on first run if absent):
 Install-Module Az.Accounts, Az.DataFactory, Az.Synapse -Scope CurrentUser
 Install-Module SqlServer -MinimumVersion 22.0.0 -Scope CurrentUser
 Install-Module azure.datafactory.tools -RequiredVersion 1.11.0 -Scope CurrentUser
-Install-Module azure.synapse.tools     -RequiredVersion 1.6.0  -Scope CurrentUser
+Install-Module azure.synapse.tools     -RequiredVersion 0.27.0 -Scope CurrentUser
 ```
 
 Verify everything at once:

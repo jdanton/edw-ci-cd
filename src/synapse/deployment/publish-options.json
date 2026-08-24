@@ -34,8 +34,7 @@
         "includes": [],
         "deleteNotInSource": true,
         "stopStartTriggers": true,
-        "createNewInstance": false,
-        "ignoreLogsAtEnd": false
+        "createNewInstance": false
     },
     "environments": {
         "dev": {

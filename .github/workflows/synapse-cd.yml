@@ -63,9 +63,14 @@ concurrency:
   group: synapse-cd
   cancel-in-progress: false
 
-env:
-  TERRAFORM_VERSION: '1.9.8'
-  SYNAPSE_TOOLS_VERSION: '1.6.0'
+# There are deliberately no TERRAFORM_VERSION / SYNAPSE_TOOLS_VERSION variables
+# here. Every deployment job below is a call to _synapse-deploy.yml, and the
+# `env` context is NOT available in a reusable workflow's `with:` block - GitHub
+# allows only github, needs, strategy, matrix, inputs and vars there. Version
+# pins set at this level could never be passed down; they would sit in the file
+# looking authoritative while the callee quietly used its own defaults. Both
+# pins live on the inputs of _synapse-deploy.yml, which is also where to
+# override them.
 
 jobs:
 

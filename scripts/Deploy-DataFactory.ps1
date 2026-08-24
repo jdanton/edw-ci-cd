@@ -151,11 +151,39 @@ foreach ($pattern in $effective['includes']) {
     Write-Host "    include: $pattern"
 }
 
-$opt.DeleteNotInSource  = [bool]$effective['deleteNotInSource']
-$opt.StopStartTriggers  = [bool]$effective['stopStartTriggers']
-$opt.CreateNewInstance  = [bool]$effective['createNewInstance']
-$opt.DeployGlobalParams = [bool]$effective['deployGlobalParams']
-$opt.IgnoreLogsAtEnd    = [bool]$effective['ignoreLogsAtEnd']
+# AdfPublishOption is a PowerShell CLASS, not a PSCustomObject, so assigning a
+# property it does not define throws "The property 'X' cannot be found on this
+# object" - naming the module's property, never our key, and not listing what
+# the module does accept. Map explicitly and check before assigning, so an
+# option the installed version dropped or renamed says so in one line.
+$optionMap = [ordered]@{
+    deleteNotInSource  = 'DeleteNotInSource'
+    stopStartTriggers  = 'StopStartTriggers'
+    createNewInstance  = 'CreateNewInstance'
+    deployGlobalParams = 'DeployGlobalParams'
+}
+
+$supported = ($opt | Get-Member -MemberType Property).Name
+
+foreach ($key in $optionMap.Keys) {
+    if (-not $effective.ContainsKey($key)) { continue }
+    $property = $optionMap[$key]
+    if ($supported -notcontains $property) {
+        throw ("azure.datafactory.tools $ModuleVersion has no publish option " +
+               "'$property' (from '$key' in publish-options.json). It accepts: " +
+               ($supported -join ', ') + '.')
+    }
+    $opt.$property = [bool]$effective[$key]
+}
+
+# A key nothing maps is a key that does nothing. Fail rather than let a publish
+# option sit in the file for a year looking like it is in force.
+$known    = @('excludes', 'includes') + [string[]]$optionMap.Keys
+$unmapped = $effective.Keys | Where-Object { $_ -notin $known }
+if ($unmapped) {
+    throw ("publish-options.json sets option(s) this script does not translate: " +
+           ($unmapped -join ', ') + '. Known keys: ' + ($known -join ', ') + '.')
+}
 
 # Fail loudly when the config CSV names an artifact or property that does not
 # exist. The module's default is to warn and continue, which means a typo in a

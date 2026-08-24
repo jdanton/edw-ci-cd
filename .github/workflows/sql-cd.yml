@@ -58,7 +58,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  TERRAFORM_VERSION: '1.9.8'
+  # No TERRAFORM_VERSION here: the three publish jobs are calls to
+  # _sql-publish.yml, and the `env` context is not available in a reusable
+  # workflow's `with:` block (only github, needs, strategy, matrix, inputs and
+  # vars are), so a pin set here could never reach it. It lives on that
+  # workflow's terraform_version input instead. DOTNET_MINIMUM_MAJOR stays
+  # because the build job below reads it directly.
   DOTNET_MINIMUM_MAJOR: '8'
 
 jobs:

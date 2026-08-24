@@ -32,7 +32,8 @@ on:
       synapse_tools_version:
         required: false
         type: string
-        default: '1.6.0'
+        # Newest release on the PowerShell Gallery. The module has no 1.x.
+        default: '0.27.0'
 
 permissions:
   id-token: write

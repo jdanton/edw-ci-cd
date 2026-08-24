@@ -23,8 +23,7 @@
         "  createNewInstance Create the factory if missing. Always false here - Terraform",
         "                    owns factory creation, and a pipeline that can create",
         "                    factories can create them in the wrong subscription.",
-        "  deployGlobalParams Publish factory/*.json global parameters.",
-        "  ignoreLogsAtEnd   Suppress the module's end-of-run log dump in CI."
+        "  deployGlobalParams Publish factory/*.json global parameters."
     ],
     "default": {
         "excludes": [
@@ -36,8 +35,7 @@
         "deleteNotInSource": true,
         "stopStartTriggers": true,
         "createNewInstance": false,
-        "deployGlobalParams": false,
-        "ignoreLogsAtEnd": false
+        "deployGlobalParams": false
     },
     "environments": {
         "dev": {

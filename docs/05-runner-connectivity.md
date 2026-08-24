@@ -313,7 +313,7 @@ saves two to three minutes per run:
 dotnet tool install --global microsoft.sqlpackage
 pwsh -c "Install-Module SqlServer -MinimumVersion 22.0.0 -Scope AllUsers -Force"
 pwsh -c "Install-Module azure.datafactory.tools -RequiredVersion 1.11.0 -Scope AllUsers -Force"
-pwsh -c "Install-Module azure.synapse.tools     -RequiredVersion 1.6.0  -Scope AllUsers -Force"
+pwsh -c "Install-Module azure.synapse.tools     -RequiredVersion 0.27.0 -Scope AllUsers -Force"
 ```
 
 ### Outbound internet
