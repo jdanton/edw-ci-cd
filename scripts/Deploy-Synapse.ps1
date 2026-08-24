@@ -90,6 +90,77 @@ Import-Module azure.synapse.tools -RequiredVersion $ModuleVersion -Force
 Write-Ok "Module loaded: $((Get-Module azure.synapse.tools).Version)"
 
 # ---------------------------------------------------------------------------
+# UPSTREAM BUG SHIM: the module cannot build a bearer token on Linux.
+#
+# Artifacts that go over the Dev REST API - sqlscripts, notebooks, kqlscripts,
+# Spark job definitions, datasets - get their header from the module's private
+# Get-RequestHeader, which unwraps the SecureString that Az.Accounts 5.x now
+# returns like this:
+#
+#   $BSTR  = [Marshal]::SecureStringToBSTR($SynapseToken.Token)   # UTF-16 buffer
+#   $token = [Marshal]::PtrToStringAuto($BSTR)                    # WRONG on Unix
+#
+# PtrToStringAuto is Unicode on Windows and UTF-8 elsewhere. Reading a UTF-16
+# BSTR as UTF-8 stops at the first NUL byte, so on a Linux runner a token comes
+# back as its FIRST CHARACTER. The request then fails with
+#
+#   AuthenticationFailed - IDX12741: JWT must have three segments (JWS) or
+#   five segments (JWE)
+#
+# which reads like a credential problem and is a marshalling problem. Windows
+# runners never see it. 0.27.0 is the newest release, so there is nothing to
+# upgrade to.
+#
+# Replaced below, in the module's own scope, with PtrToStringBSTR - which is
+# length-prefixed and correct on every platform - and a type test instead of a
+# version test, so it also handles an older Az.Accounts returning a String.
+#
+# The patch removes itself: it only applies while the installed module still
+# contains PtrToStringAuto. Delete this block once upstream ships a fix.
+# ---------------------------------------------------------------------------
+
+$needsShim = & (Get-Module azure.synapse.tools) {
+    (Test-Path Function:Get-RequestHeader) -and
+    ((Get-Item Function:Get-RequestHeader).Definition -match 'PtrToStringAuto')
+}
+
+if ($needsShim) {
+    # DOT-SOURCE, not '&'. The call operator runs the block in a CHILD scope of
+    # the module, so the replacement would vanish the moment the block returned
+    # and the broken original would still be the one that runs - a shim that
+    # reports success and changes nothing. Dot-sourcing defines it in the
+    # module's own scope, where the module's internal callers resolve it.
+    . (Get-Module azure.synapse.tools) {
+        function Get-RequestHeader {
+            $accessToken = Get-AzAccessToken -ResourceUrl 'https://dev.azuresynapse.net'
+            $token       = $accessToken.Token
+
+            # Type test, not a version test: correct for any Az.Accounts, and
+            # for whatever the next one decides to return.
+            if ($token -is [System.Security.SecureString]) {
+                $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($token)
+                try {
+                    $token = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+                }
+                finally {
+                    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+                }
+            }
+
+            return @{
+                'Content-Type'  = 'application/json'
+                'Authorization' = 'Bearer ' + $token
+            }
+        }
+    }
+
+    Write-Ok 'Patched Get-RequestHeader (upstream PtrToStringAuto bug, see comment above).'
+}
+else {
+    Write-Ok 'Get-RequestHeader needs no patch in this version.'
+}
+
+# ---------------------------------------------------------------------------
 # 2. Target
 # ---------------------------------------------------------------------------
 

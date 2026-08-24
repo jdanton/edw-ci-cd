@@ -632,6 +632,58 @@ az synapse workspace delete -n <workspace> -g <rg> --yes
 Do not simply re-run the apply against it - Terraform will attempt an update,
 which also fails, and you lose another 30 minutes.
 
+### `IDX12741: JWT must have three segments` deploying a sqlscript {#idx12741}
+
+```
+Start deploying object: [sqlscript].[SQL_Explore_YellowTaxi] (0 dependency/ies)
+WARNING: sqlscripts are being deployed by Rest-API regardless of PublishMethod.
+Invoke-RestMethod: .../azure.synapse.tools/0.27.0/private/Deploy-SynapseObjectOnly.ps1:145
+     | { "code": "AuthenticationFailed", "message": "Token Authentication failed -
+     |   IDX12741: JWT must have three segments (JWS) or five segments (JWE)." }
+```
+
+Not a credential problem — a **marshalling** one, and only on Linux. The
+module's `Get-RequestHeader` unwraps the SecureString that Az.Accounts 5.x
+returns like this:
+
+```powershell
+$BSTR  = [Marshal]::SecureStringToBSTR($SynapseToken.Token)   # UTF-16 buffer
+$token = [Marshal]::PtrToStringAuto($BSTR)                    # wrong on Unix
+```
+
+`PtrToStringAuto` is UTF-16 on Windows and UTF-8 everywhere else. Reading a
+UTF-16 buffer as UTF-8 stops at the first NUL byte, so the token arrives as its
+**first character**:
+
+```
+original        : [aaaa.bbbb.cccc] len=14
+PtrToStringAuto : [a] len=1 segments=1        <- what gets sent
+PtrToStringBSTR : [aaaa.bbbb.cccc] len=14 segments=3
+```
+
+One character is not a JWT, hence the error. A Windows runner never sees it.
+The same function also picks its branch from
+`(Get-Command Get-AzAccessToken).Version`, which resolves to the wrong module
+when several Az.Accounts versions are installed — that route sends the literal
+string `System.Security.SecureString` and fails identically.
+
+`Deploy-Synapse.ps1` replaces the function in the module's own scope with a
+version using `PtrToStringBSTR` and a type test. 0.27.0 is the newest release,
+so there is nothing to upgrade to. The patch applies only while the installed
+module still contains `PtrToStringAuto`, and the script says which path it
+took:
+
+```
+Patched Get-RequestHeader (upstream PtrToStringAuto bug, see comment above).
+Get-RequestHeader needs no patch in this version.
+```
+
+This affects every artifact the module sends over the Dev REST API —
+sqlscripts, notebooks, kqlscripts, Spark job definitions, datasets — and
+starting or stopping Synapse triggers. Linked services and pipelines go through
+`Set-AzSynapse*` cmdlets, which handle their own auth, which is why they deploy
+fine and the failure looks artifact-specific.
+
 ### `New-AzResource` fails with only a CorrelationId {#synapse-armresource-empty-error}
 
 ```

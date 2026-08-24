@@ -381,6 +381,19 @@ identity gets it by being a member of the Synapse admin group created in
 `bootstrap/`. A 401 or 403 from this step means that membership, not a network
 fault.
 
+### The `Get-RequestHeader` patch
+
+`Deploy-Synapse.ps1` replaces one private function inside `azure.synapse.tools`
+before publishing. The module builds its Dev-API bearer token with
+`Marshal::PtrToStringAuto`, which is UTF-16 on Windows and UTF-8 elsewhere —
+so on a Linux runner the token becomes its first character and every REST-based
+artifact fails with `IDX12741: JWT must have three segments`
+([12-troubleshooting](12-troubleshooting.md#idx12741)). 0.27.0 is the newest
+release; there is nothing to upgrade to.
+
+The patch is dot-sourced into the module's scope, uses `PtrToStringBSTR`, and
+removes itself once the installed module no longer contains the broken call.
+
 ### `workspace/integrationRuntime/AutoResolveIntegrationRuntime.json`
 
 A placeholder, never deployed — `publish-options.json` excludes
