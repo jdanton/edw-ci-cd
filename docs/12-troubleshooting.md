@@ -647,12 +647,42 @@ half-configured state.
 
 ## Data Factory
 
+### `InvalidAuthenticationToken` from `Get-AzDFV2Credential` {#invalid-auth-token}
+
+```
+Invoke-RestMethod: .../azure.datafactory.tools/<version>/private/Get-AzDFV2Credential.ps1:17
+     | { "error": { "code": "InvalidAuthenticationToken",
+     |              "message": "The access token is invalid." } }
+```
+
+The token is fine; the module is too old. Below **1.16.0**,
+`Get-AzDFV2Credential` and `Remove-AdfObjectRestAPI` build the ARM
+`Authorization` header by hand:
+
+```powershell
+$token = Get-AzAccessToken -ResourceUrl 'https://management.azure.com'
+'Bearer ' + $token.Token
+```
+
+Two things break that on a current runner:
+
+- **Az.Accounts 5.0.0** changed `Get-AzAccessToken` to return `Token` as a
+  `SecureString` by default. String-concatenating one yields the literal
+  `Bearer System.Security.SecureString`.
+- The hand-rolled path cannot use a **federated (OIDC) credential** at all —
+  which is exactly how this template authenticates.
+
+1.16.0 replaced both call sites with `Invoke-AzRestMethod`, which acquires and
+attaches the token itself. Pin 1.16.0 or later; this repo pins 1.18.0. Note the
+`Get-AzAccessToken` deprecation warnings you may have seen in earlier runs were
+the same problem announcing itself.
+
 ### `The term 'New-AzResource' is not recognized` {#new-azresource-missing}
 
 ```
 STEP: Deployment of all ADF objects...
 Start deploying object: [linkedService].[LS_ADLS_Lake] (1 dependency/ies)
-Deploy-AdfObjectOnly: .../azure.datafactory.tools/1.11.0/private/Deploy-AdfObject.ps1:43
+Deploy-AdfObjectOnly: .../azure.datafactory.tools/<version>/private/Deploy-AdfObject.ps1:43
      | The term 'New-AzResource' is not recognized as a name of a cmdlet ...
 ```
 

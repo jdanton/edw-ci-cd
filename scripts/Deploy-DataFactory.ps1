@@ -41,7 +41,13 @@ param(
 
     [string] $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
 
-    [string] $ModuleVersion = '1.11.0',
+    # 1.16.0 is the floor, not a preference: earlier versions build the ARM
+    # Authorization header by hand from Get-AzAccessToken, which breaks twice
+    # over on a modern runner - Az.Accounts 5.x returns the token as a
+    # SecureString, and the hand-rolled path cannot use a federated (OIDC)
+    # credential at all. 1.16.0 replaced it with Invoke-AzRestMethod. 1.18.0 is
+    # the current release and is API-compatible with everything used here.
+    [string] $ModuleVersion = '1.18.0',
 
     [switch] $SkipConfigGeneration
 )
@@ -62,22 +68,11 @@ $terraformDir = Join-Path $RepositoryRoot 'infra' 'terraform'
 # 1. Module
 # ---------------------------------------------------------------------------
 
-Write-Step "Ensuring azure.datafactory.tools $ModuleVersion is available."
-
-if (-not (Get-Module -ListAvailable -Name azure.datafactory.tools |
-          Where-Object { $_.Version -eq [version]$ModuleVersion })) {
-    Install-Module -Name azure.datafactory.tools `
-                   -RequiredVersion $ModuleVersion `
-                   -Scope CurrentUser -Force -AllowClobber
-}
-
-Import-Module azure.datafactory.tools -RequiredVersion $ModuleVersion -Force
-Write-Ok "Module loaded: $((Get-Module azure.datafactory.tools).Version)"
-
-# The Az modules the publish path actually reaches for. azure.datafactory.tools
-# declares no RequiredModules, so a missing one surfaces as a bare "The term
-# 'X' is not recognized" from inside the module, mid-deployment, with the
-# triggers already stopped:
+# The Az modules the publish path reaches for. Installed BEFORE
+# azure.datafactory.tools is imported: from its 1.12.0 the import itself expects
+# Az.Resources and Az.DataFactory. The module still declares no RequiredModules,
+# so a missing one otherwise surfaces as a bare "The term 'X' is not recognized"
+# from inside the module, mid-deployment, with the triggers already stopped:
 #
 #   Az.Resources   New-AzResource. The default publish Method is 'AzResource',
 #                  so every artifact goes through it.
@@ -94,6 +89,18 @@ foreach ($module in @('Az.Accounts', 'Az.Resources', 'Az.DataFactory')) {
     }
 }
 Write-Ok 'Az modules present: Az.Accounts, Az.Resources, Az.DataFactory'
+
+Write-Step "Ensuring azure.datafactory.tools $ModuleVersion is available."
+
+if (-not (Get-Module -ListAvailable -Name azure.datafactory.tools |
+          Where-Object { $_.Version -eq [version]$ModuleVersion })) {
+    Install-Module -Name azure.datafactory.tools `
+                   -RequiredVersion $ModuleVersion `
+                   -Scope CurrentUser -Force -AllowClobber
+}
+
+Import-Module azure.datafactory.tools -RequiredVersion $ModuleVersion -Force
+Write-Ok "Module loaded: $((Get-Module azure.datafactory.tools).Version)"
 
 # ---------------------------------------------------------------------------
 # 2. Target, from Terraform

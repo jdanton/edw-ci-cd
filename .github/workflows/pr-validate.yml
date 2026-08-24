@@ -41,7 +41,7 @@ concurrency:
 
 env:
   TERRAFORM_VERSION: '1.9.8'
-  ADF_TOOLS_VERSION: '1.11.0'
+  ADF_TOOLS_VERSION: '1.18.0'
   DOTNET_MINIMUM_MAJOR: '8'
 
 jobs:

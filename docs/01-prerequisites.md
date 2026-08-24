@@ -21,7 +21,7 @@ PowerShell modules (the scripts install them on first run if absent):
 ```powershell
 Install-Module Az.Accounts, Az.Resources, Az.DataFactory, Az.Synapse -Scope CurrentUser
 Install-Module SqlServer -MinimumVersion 22.0.0 -Scope CurrentUser
-Install-Module azure.datafactory.tools -RequiredVersion 1.11.0 -Scope CurrentUser
+Install-Module azure.datafactory.tools -RequiredVersion 1.18.0 -Scope CurrentUser
 Install-Module azure.synapse.tools     -RequiredVersion 0.27.0 -Scope CurrentUser
 ```
 

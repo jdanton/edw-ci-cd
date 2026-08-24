@@ -66,6 +66,17 @@ $terraformDir  = Join-Path $RepositoryRoot 'infra' 'terraform'
 # 1. Module
 # ---------------------------------------------------------------------------
 
+# Same Az dependency set as Deploy-DataFactory.ps1, for the same reason:
+# azure.synapse.tools declares no RequiredModules, and its
+# Deploy-SynapseObjectOnly calls New-AzResource from Az.Resources.
+foreach ($module in @('Az.Accounts', 'Az.Resources', 'Az.Synapse')) {
+    if (-not (Get-Module -ListAvailable -Name $module)) {
+        Write-Step "Installing $module (required by azure.synapse.tools)."
+        Install-Module -Name $module -Scope CurrentUser -Force -AllowClobber
+    }
+}
+Write-Ok 'Az modules present: Az.Accounts, Az.Resources, Az.Synapse'
+
 Write-Step "Ensuring azure.synapse.tools $ModuleVersion is available."
 
 if (-not (Get-Module -ListAvailable -Name azure.synapse.tools |
@@ -77,17 +88,6 @@ if (-not (Get-Module -ListAvailable -Name azure.synapse.tools |
 
 Import-Module azure.synapse.tools -RequiredVersion $ModuleVersion -Force
 Write-Ok "Module loaded: $((Get-Module azure.synapse.tools).Version)"
-
-# Same Az dependency set as Deploy-DataFactory.ps1, for the same reason:
-# azure.synapse.tools declares no RequiredModules, and its
-# Deploy-SynapseObjectOnly calls New-AzResource from Az.Resources.
-foreach ($module in @('Az.Accounts', 'Az.Resources', 'Az.Synapse')) {
-    if (-not (Get-Module -ListAvailable -Name $module)) {
-        Write-Step "Installing $module (required by azure.synapse.tools)."
-        Install-Module -Name $module -Scope CurrentUser -Force -AllowClobber
-    }
-}
-Write-Ok 'Az modules present: Az.Accounts, Az.Resources, Az.Synapse'
 
 # ---------------------------------------------------------------------------
 # 2. Target

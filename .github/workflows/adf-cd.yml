@@ -70,7 +70,10 @@ concurrency:
 
 env:
   TERRAFORM_VERSION: '1.9.8'
-  ADF_TOOLS_VERSION: '1.11.0'
+  # 1.16.0 is the floor: below it the module hand-builds the ARM auth header
+  # from Get-AzAccessToken, which fails as InvalidAuthenticationToken on
+  # Az.Accounts 5.x (SecureString) and cannot use an OIDC credential at all.
+  ADF_TOOLS_VERSION: '1.18.0'
 
 jobs:
 
