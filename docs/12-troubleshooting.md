@@ -632,6 +632,59 @@ az synapse workspace delete -n <workspace> -g <rg> --yes
 Do not simply re-run the apply against it - Terraform will attempt an update,
 which also fails, and you lose another 30 minutes.
 
+### `Login failed for user '<token-identified principal>'` deploying serverless SQL {#serverless-login-failed}
+
+```
+==> Acquiring an Entra access token for the SQL data plane.
+    Token acquired.
+==> 010_database.sql  ->  [master]
+    XX 010_database.sql FAILED
+       Login failed for user '<token-identified principal>'.
+```
+
+The token is valid — it was issued, and ARM calls in the same job succeeded.
+What it lacks is any standing on the serverless endpoint. That endpoint's
+administrator is an **Entra group**, and the deployment service principal has to
+be a member of it. This is not Azure RBAC: Contributor on the workspace grants
+nothing here.
+
+Check the workspace's admin, then the group's membership:
+
+```bash
+az synapse sql ad-admin show \
+  --workspace-name syn-edwtaxi-dev-65ri --resource-group rg-edwtaxi-dev-eus-2 \
+  --query "{login:login, groupObjectId:sid}" -o json
+
+az ad group member list --group <groupObjectId> --query "[].displayName" -o tsv
+az ad sp show --id <AZURE_CLIENT_ID from the environment> --query "{name:displayName, objectId:id}"
+```
+
+Two traps in that check:
+
+- **`az ad` talks to the tenant of your CURRENT subscription.** If your default
+  subscription is in a different tenant, the group lookup returns
+  "Resource ... does not exist", which reads like the group was deleted. Run
+  `az account set --subscription <deployment sub>` first.
+- The `sid` field of the ad-admin output is the **group's object ID**, not a
+  security identifier in the Windows sense.
+
+`bootstrap/main.tf` declares the deploy identity as a member of both
+`sg-<project>-sqladmin-<env>` and `sg-<project>-synapseadmin-<env>`, so a group
+containing only humans means bootstrap drifted — most often because it was
+applied before the service principals had replicated through Entra, and never
+re-applied.
+
+Repair it by re-applying bootstrap **where its state lives**. Both the state
+and `terraform.tfvars` are gitignored, so a fresh clone has neither, and
+applying from an empty state creates a second set of app registrations, service
+principals and groups rather than fixing the membership. A correct plan touches
+group membership and nothing else.
+
+The same gap fails `sql-cd`: `sqlpackage` authenticates to Azure SQL as an Entra
+principal, so without membership in `sg-<project>-sqladmin-<env>` it cannot
+connect, and `040_ServicePrincipals.sql` never runs
+([above](#adf-cannot-log-in-to-azure-sql) is the *downstream* symptom of that).
+
 ### `The SQL pool is warming up. Please try again.` {#serverless-warming-up}
 
 ```
