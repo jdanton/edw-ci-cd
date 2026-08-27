@@ -143,7 +143,23 @@ BEGIN
          DATEDIFF(SECOND, ...) hits on the handful of rows with a 1970 pickup
          and a 2024 dropoff.
        --------------------------------------------------------------------- */
-    SET @sql = N'
+    /* -------------------------------------------------------------------
+       CAST(N'' AS NVARCHAR(MAX)) is load-bearing, not decoration.
+
+       Concatenating nvarchar(n) operands yields nvarchar(n1+n2...) CAPPED AT
+       4000, and the surplus is dropped silently. Declaring @sql as
+       NVARCHAR(MAX) does not save it: the truncation happens while the
+       expression is evaluated, before the assignment. Seeding the chain with a
+       MAX-typed empty string makes every subsequent concatenation MAX.
+
+       This statement is ~4470 characters. It fit under the limit until
+       CongestionSurchargeAmount added a column and its comment, and then the
+       CETAS arrived at the server cut off mid-way, failing with a parse error
+       ("Incorrect syntax near ...") that named a token in the middle of a
+       perfectly good procedure and gave no hint that anything had been
+       truncated. Any further column or comment would have done the same.
+       ------------------------------------------------------------------- */
+    SET @sql = CAST(N'' AS NVARCHAR(MAX)) + N'
 CREATE EXTERNAL TABLE curated.' + QUOTENAME(@tableName) + N'
 WITH (
     LOCATION    = ''' + @location + N''',
