@@ -63,6 +63,12 @@ on:
         default: false
         type: boolean
 
+      remove_rbac_principal:
+        description: 'Object ID whose Synapse Administrator assignment to REMOVE (blank = skip). Use to hand a hand-made assignment over to Terraform.'
+        required: false
+        default: ''
+        type: string
+
 permissions:
   id-token: write
   contents: read
@@ -135,6 +141,26 @@ jobs:
             --workspace-name (terraform -chdir=infra/terraform output -raw synapse_workspace_name) `
             --output table
         continue-on-error: true
+
+      # Synapse RBAC lives in the workspace, not in ARM, so Terraform cannot
+      # adopt an assignment made by hand - azurerm_synapse_role_assignment would
+      # try to create a second one and the API refuses. Removing it first lets
+      # Terraform own it, and the Dev API is private, so this has to run here.
+      - name: Remove a Synapse role assignment
+        if: inputs.remove_rbac_principal != ''
+        shell: pwsh
+        run: |
+          $ws = terraform -chdir=infra/terraform output -raw synapse_workspace_name
+          $id = az synapse role assignment list --workspace-name $ws `
+                  --query "[?principalId=='${{ inputs.remove_rbac_principal }}'].id | [0]" -o tsv
+
+          if ([string]::IsNullOrWhiteSpace($id)) {
+            Write-Host '::notice::No Synapse role assignment for that principal - nothing to remove.'
+            exit 0
+          }
+
+          az synapse role assignment delete --workspace-name $ws --id $id --yes
+          Write-Host "Removed $id - Terraform can now create it."
 
       - name: Grant Synapse Administrator
         if: inputs.synapse_rbac_principal != ''

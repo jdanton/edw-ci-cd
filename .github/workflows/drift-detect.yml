@@ -238,6 +238,47 @@ jobs:
             *) echo "::error::terraform plan failed for ${{ matrix.environment }}"; exit 1 ;;
           esac
 
+      # -----------------------------------------------------------------------
+      # Settings `terraform plan` structurally cannot report.
+      #
+      # The Synapse workspace must be CREATED with public access enabled - Azure
+      # cannot finish provisioning a managed-VNet workspace that cannot reach
+      # its own endpoints - and is switched off immediately afterwards by an ARM
+      # PATCH. To stop every subsequent plan proposing to turn it back on,
+      # public_network_access_enabled sits in the resource's ignore_changes.
+      #
+      # The cost of that is a blind spot: if somebody enables public access -
+      # opening the firewall to debug something is the usual reason - nothing
+      # brings it back. The PATCH is a one-shot triggered by workspace
+      # creation, and plan is looking the other way by design. The platform
+      # quietly stops being private-only and no pipeline says a word.
+      #
+      # So it is checked here instead, where drift is the subject.
+      # -----------------------------------------------------------------------
+      - name: Check settings Terraform cannot see
+        if: always()
+        working-directory: infra/terraform
+        shell: pwsh
+        run: |
+          $workspace = terraform output -raw synapse_workspace_name 2>$null
+          $rg        = terraform output -raw resource_group_name 2>$null
+
+          if ([string]::IsNullOrWhiteSpace($workspace)) {
+            Write-Host 'No Synapse workspace in this state - nothing to check.'
+            exit 0
+          }
+
+          $access = az synapse workspace show -n $workspace -g $rg --query publicNetworkAccess -o tsv
+
+          if ($access -eq 'Disabled') {
+            Write-Host "  publicNetworkAccess: Disabled (as configured)"
+            Add-Content $env:GITHUB_STEP_SUMMARY "- ``$workspace`` publicNetworkAccess: **Disabled**"
+          }
+          else {
+            Write-Host "::warning::$workspace has publicNetworkAccess = $access. This platform is configured private-only (public_network_access_enabled = false), and terraform plan cannot see this setting - it is in ignore_changes. Restore it with: az resource update --ids <workspace id> --set properties.publicNetworkAccess=Disabled"
+            Add-Content $env:GITHUB_STEP_SUMMARY "- ``$workspace`` publicNetworkAccess: **$access** - expected Disabled, and plan cannot see it"
+          }
+
       - name: Report
         if: always()
         shell: pwsh
