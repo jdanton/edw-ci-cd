@@ -139,9 +139,10 @@ BEGIN
          as rejected with reason 'Duplicate'.
 
        * TripDurationSeconds is derived once here rather than in every
-         downstream query. DATEDIFF_BIG avoids the 68-year overflow that
-         DATEDIFF(SECOND, ...) hits on the handful of rows with a 1970 pickup
-         and a 2024 dropoff.
+         downstream query. It is computed as whole days plus the remainder
+         rather than with DATEDIFF(SECOND, ...) directly, which overflows on
+         the handful of rows with a 1970 pickup and a 2024 dropoff, or with
+         DATEDIFF_BIG, which a CETAS refuses to run at all.
        --------------------------------------------------------------------- */
     /* -------------------------------------------------------------------
        CAST(N'' AS NVARCHAR(MAX)) is load-bearing, not decoration.
@@ -214,7 +215,17 @@ FROM (
         , PickupDateTime      = r.tpepPickupDateTime
         , DropoffDateTime     = r.tpepDropoffDateTime
         , PickupDate          = CAST(r.tpepPickupDateTime AS DATE)
-        , TripDurationSeconds = CAST(DATEDIFF_BIG(SECOND, r.tpepPickupDateTime, r.tpepDropoffDateTime) AS INT)
+        /* DATEDIFF_BIG is rejected inside a CETAS - "The query references an
+           object that is not supported in distributed processing mode", which
+           names neither the function nor this column. Same seconds, computed
+           without it: whole days (never near an overflow) plus the remainder
+           inside one day (never near one either). */
+        , TripDurationSeconds = CAST(
+              CAST(DATEDIFF(DAY, r.tpepPickupDateTime, r.tpepDropoffDateTime) AS BIGINT) * 86400
+            + DATEDIFF(SECOND,
+                       DATEADD(DAY, DATEDIFF(DAY, r.tpepPickupDateTime, r.tpepDropoffDateTime), r.tpepPickupDateTime),
+                       r.tpepDropoffDateTime)
+              AS INT)
         , PassengerCount      = TRY_CAST(r.passengerCount AS SMALLINT)
         , TripDistanceMiles   = TRY_CAST(r.tripDistance AS DECIMAL(9,3))
         , PickupLocationId    = TRY_CAST(r.puLocationId AS SMALLINT)
