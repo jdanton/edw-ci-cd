@@ -7,10 +7,6 @@
             "type": "LinkedServiceReference"
         },
         "parameters": {
-            "container": {
-                "type": "string",
-                "defaultValue": "nyctlc"
-            },
             "folderPath": {
                 "type": "string"
             }
@@ -23,10 +19,6 @@
         "typeProperties": {
             "location": {
                 "type": "AzureBlobStorageLocation",
-                "container": {
-                    "value": "@dataset().container",
-                    "type": "Expression"
-                },
                 "folderPath": {
                     "value": "@dataset().folderPath",
                     "type": "Expression"

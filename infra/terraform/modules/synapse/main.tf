@@ -402,6 +402,28 @@ resource "azurerm_synapse_managed_private_endpoint" "this" {
     azurerm_private_endpoint.workspace,
     time_sleep.wait_for_workspace_private_endpoints,
   ]
+
+  lifecycle {
+    ignore_changes = [
+      # THE ONE THAT RE-CREATED THIS ENDPOINT ON EVERY SINGLE APPLY.
+      #
+      # Azure POPULATES fully_qualified_domain_names itself - for the Key Vault
+      # endpoint it fills in kv-<name>.vault.azure.net - while this resource
+      # passes nothing, because the FQDN is a property of the target, not a
+      # decision. So state held Azure's value, configuration held null, and the
+      # attribute is ForceNew:
+      #
+      #   - fully_qualified_domain_names = [ # forces replacement
+      #       - "kv-edwtaxi-dev-65ri.vault.azure.net",
+      #     ] -> null
+      #
+      # Every apply therefore destroyed and re-created a working managed private
+      # endpoint, and one of those re-creations came back
+      # provisioningState = Failed and broke the apply. A destructive no-op that
+      # eventually destroys something for real is the worst kind of drift.
+      fully_qualified_domain_names,
+    ]
+  }
 }
 
 # ---------------------------------------------------------------------------

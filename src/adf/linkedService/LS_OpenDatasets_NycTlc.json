@@ -1,7 +1,7 @@
 {
     "name": "LS_OpenDatasets_NycTlc",
     "properties": {
-        "description": "Azure Open Datasets - NYC Taxi & Limousine Commission trip records. PUBLIC, ANONYMOUS blob storage account owned by Microsoft; there is nothing to authenticate with and no credential to rotate. Identical in every environment, so config-<env>.csv leaves it alone. NOTE: this is the one outbound destination in the whole platform that is NOT reached over a managed private endpoint - a managed-VNet Azure IR keeps outbound access to public endpoints, which is what makes an anonymous read possible. If you ever enable Synapse data exfiltration protection or an equivalent egress lockdown, this is the first thing that breaks.",
+        "description": "Azure Open Datasets - NYC Taxi & Limousine Commission trip records. PUBLIC, ANONYMOUS blob storage account owned by Microsoft; there is nothing to authenticate with and no credential to rotate. Identical in every environment, so config-<env>.csv leaves it alone. NOTE: this is the one outbound destination in the whole platform that is NOT reached over a managed private endpoint - a managed-VNet Azure IR keeps outbound access to public endpoints, which is what makes an anonymous read possible. If you ever enable Synapse data exfiltration protection or an equivalent egress lockdown, this is the first thing that breaks. CONTAINER URI, NOT serviceEndpoint: anonymous public read is granted per CONTAINER, never per account, so ADF has no account-level anonymous mode. Configured with serviceEndpoint it deploys cleanly and then fails at run time with \"Please provide container uri to connect to Blob\" - an error that names neither the linked service nor anonymous auth. Because the container is part of the URI, datasets on this linked service set folderPath and fileName only.",
         "annotations": [
             "public-source",
             "nyc-taxi",
@@ -9,7 +9,7 @@
         ],
         "type": "AzureBlobStorage",
         "typeProperties": {
-            "serviceEndpoint": "https://azureopendatastorage.blob.core.windows.net",
+            "containerUri": "https://azureopendatastorage.blob.core.windows.net/nyctlc",
             "accountKind": "StorageV2",
             "authenticationType": "Anonymous"
         },
