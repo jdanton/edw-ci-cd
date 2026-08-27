@@ -118,8 +118,9 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
         # A probe that cannot log in must not be able to skip a deployment.
-        # Failing here leaves every output unset, which the gates below read as
-        # "assume it exists".
+        # Failing here makes every environment fail to initialise, which the
+        # step below reads as a fault in the probe rather than three missing
+        # environments, and assumes all of them exist.
         continue-on-error: true
 
       - name: Read each environment's state
@@ -127,10 +128,20 @@ jobs:
         working-directory: infra/terraform
         run: |
           set -uo pipefail
+
+          # Probe every environment, then decide what the results mean.
+          #
+          # The decision cannot be made inside the loop, because a failed
+          # `terraform init` is ambiguous on its own: it is what a missing state
+          # backend looks like, and it is also what a bad credential looks like.
+          # Which one it is depends on whether the OTHER environments managed to
+          # initialise, and that is not known until the loop has finished.
+          probe=$(mktemp)
+          anyInit=false
+
           for env in dev test prod; do
-            deployed=true
-            reason='probe failed - assuming it exists'
             if terraform init -reconfigure -no-color -backend-config="envs/$env/backend.hcl" >/dev/null 2>&1; then
+              anyInit=true
               count=$(terraform state list 2>/dev/null | wc -l | tr -d ' ')
               # Resources in state is not the same as a usable environment.
               # A failed apply leaves resources behind but writes no outputs,
@@ -140,18 +151,44 @@ jobs:
               # `Output "deployment_config" not found` - a red X on every push
               # for an environment nobody had finished building.
               if [ "$count" = "0" ]; then
-                deployed=false
-                reason='no resources in state - not deployed yet'
+                printf '%s\tno\tno resources in state - not deployed yet\n' "$env" >> "$probe"
               elif ! terraform output -json deployment_config >/dev/null 2>&1; then
-                deployed=false
-                reason="$count resource(s) in state but no deployment_config output - apply never completed"
+                printf '%s\tno\t%s resource(s) in state but no deployment_config output - apply never completed\n' "$env" "$count" >> "$probe"
               else
-                reason="$count resource(s) in state"
+                printf '%s\tyes\t%s resource(s) in state\n' "$env" "$count" >> "$probe"
               fi
+            else
+              printf '%s\tunknown\tterraform init failed\n' "$env" >> "$probe"
             fi
+          done
+
+          # Resolve the ambiguous ones.
+          #
+          #   some environments initialised  ->  this backend is not there, so
+          #                                      the environment has never been
+          #                                      bootstrapped. Skip it.
+          #   none did                       ->  credentials, network or the
+          #                                      runner. Assume everything
+          #                                      exists, so a broken probe can
+          #                                      never quietly skip a real
+          #                                      deployment and report success.
+          while IFS="$(printf '\t')" read -r env status reason; do
+            case "$status" in
+              yes) deployed=true ;;
+              no)  deployed=false ;;
+              *)
+                if [ "$anyInit" = 'true' ]; then
+                  deployed=false
+                  reason="$reason - other environments initialised, so this one has no state backend"
+                else
+                  deployed=true
+                  reason="$reason - no environment initialised, so this is a credential or network fault rather than a missing environment"
+                fi
+                ;;
+            esac
             echo "$env=$deployed" >> "$GITHUB_OUTPUT"
             printf '%-5s deployed=%-5s (%s)\n' "$env" "$deployed" "$reason"
-          done
+          done < "$probe"
 
       - name: Summary
         run: |
