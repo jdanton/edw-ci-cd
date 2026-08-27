@@ -207,6 +207,51 @@ jobs:
           }
           Write-Host 'ADF artifact validation passed.'
 
+      # Test-AdfCode does not know this rule, and neither does the deployment:
+      # a pipeline nesting one container activity inside another validates,
+      # publishes and sits there looking correct until someone runs it, when ADF
+      # returns
+      #
+      #   Operation on target <activity> failed: Container activity cannot
+      #   include another container activity
+      #
+      # IfCondition, ForEach, Until and Switch are all containers. The fix is to
+      # hoist the inner one to the top level and depend on the outer, or move it
+      # into a child pipeline behind an ExecutePipeline.
+      - name: Check for nested container activities
+        shell: pwsh
+        run: |
+          $containers = @('IfCondition', 'ForEach', 'Until', 'Switch')
+          $bad = @()
+
+          function Test-Activities($activities, $ancestor) {
+            foreach ($a in $activities) {
+              if ($a.type -in $containers -and $ancestor) {
+                $script:bad += [pscustomobject]@{ Outer = $ancestor; Inner = $a.name; Type = $a.type }
+              }
+              $next = if ($a.type -in $containers) { $a.name } else { $ancestor }
+              foreach ($key in @('activities', 'ifTrueActivities', 'ifFalseActivities', 'defaultActivities')) {
+                if ($a.typeProperties.$key) { Test-Activities $a.typeProperties.$key $next }
+              }
+              foreach ($case in $a.typeProperties.cases) {
+                if ($case.activities) { Test-Activities $case.activities $next }
+              }
+            }
+          }
+
+          Get-ChildItem src/adf/pipeline -Filter *.json | ForEach-Object {
+            $script:bad = @()
+            $pipeline = Get-Content $_.FullName -Raw | ConvertFrom-Json
+            Test-Activities $pipeline.properties.activities $null
+            foreach ($b in $script:bad) {
+              Write-Host "::error file=$($_.FullName)::$($b.Type) '$($b.Inner)' is nested inside container '$($b.Outer)'. ADF rejects this at RUN time, not at deployment."
+              $bad += $b
+            }
+          }
+
+          if ($bad.Count -gt 0) { exit 1 }
+          Write-Host 'No nested container activities.'
+
       - name: Report artifact inventory
         shell: pwsh
         run: |
