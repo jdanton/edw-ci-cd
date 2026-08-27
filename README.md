@@ -169,6 +169,7 @@ Each of these is explained where it lives; this is the index.
 | [11 — Operations runbook](docs/11-operations-runbook.md) | What to do when an alert fires, per alert. |
 | [12 — Troubleshooting](docs/12-troubleshooting.md) | Error messages mapped back to their actual causes. |
 | [13 — Cost](docs/13-cost.md) | What this costs, and which knobs matter. |
+| [14 — Coming from a manual deployment](docs/14-from-manual-deployment.md) | For teams already running this stack by hand: what replaces what, and what will surprise you. |
 
 ---
 
