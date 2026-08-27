@@ -16,18 +16,37 @@
         objects and nothing else.
 
    -----------------------------------------------------------------------------
-   CREATE OR ALTER is NOT supported for external data sources
+   Why this script compares before it drops
    -----------------------------------------------------------------------------
-   ...so the idempotency pattern is drop-and-recreate. That is safe because an
-   external data source holds no data. It is NOT free, though: dropping one
-   fails if any external table still references it, which is why this script
-   runs before 070_procs_curate.sql creates any, and why the DROP is guarded.
+   CREATE OR ALTER is not supported for external data sources, so the obvious
+   idempotency pattern is drop-and-recreate, and that is what this script used
+   to do: IF EXISTS ... DROP, then CREATE.
 
-   If a deployment fails here with "Cannot drop the external data source
-   'eds_curated' because it is used by external table
-   'curated.ext_YellowTaxiTrip_202401'", the location has genuinely changed and
-   you must drop the dependent external tables first. See
-   docs/12-troubleshooting.md#external-data-source-in-use.
+   That pattern is not idempotent here, because dropping an external data source
+   fails while any external table still references it - and 070_procs_curate.sql
+   creates one external table per curated partition, on eds_curated, that lives
+   as long as the data does. So the first backfill made this script fail forever
+   after:
+
+     Msg 33165 ... 030_external_data_sources.sql FAILED
+
+   The script was dropping an object it was about to recreate identically, and
+   the drop was refused for referencing tables that were entirely expected. A
+   deployment that works exactly once, and only until real data exists, is worse
+   than one that never works: it passes every test you run before you have data.
+
+   So the guard now tests the definition, not merely existence:
+
+     absent            -> create it
+     present, same     -> leave it alone (the overwhelmingly common case)
+     present, changed  -> drop and recreate, which is the only case where the
+                          dependent external tables are a genuine problem
+
+   In that last case the referencing tables are named in the error, because a
+   location change means the curated files are in a different account and those
+   tables are pointing at the old one. Dropping them is safe (they are metadata
+   over files, not data) but it is a deliberate act, so this script will not do
+   it silently. See docs/12-troubleshooting.md#external-data-source-in-use.
 
    -----------------------------------------------------------------------------
    Variables (abfss:// URIs, from terraform output lake_abfss_uris)
@@ -43,58 +62,92 @@ GO
 SET NOCOUNT ON;
 GO
 
-/* ---------------------------------------------------------------------------
-   eds_raw - immutable landing zone. Read-only by convention: nothing in this
-   database writes here, and nothing should.
-   --------------------------------------------------------------------------- */
-IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = 'eds_raw')
+/* The three names are fixed; only their locations vary by environment. Keeping
+   the compare-and-create logic in one loop rather than copying it three times
+   means the next fix here cannot land on two of the three.
+
+   The obvious way to drive that loop is a table variable of (name, location).
+   Serverless SQL does not have them:
+
+     TYPE 'table' is not supported.   Msg 15871, Level 16, State 5
+
+   so the pair is selected by index instead. Ugly, but it is three constants. */
+DECLARE @name     sysname
+      , @want     nvarchar(4000)
+      , @have     nvarchar(4000)
+      , @deps     nvarchar(max)
+      , @sql      nvarchar(max)
+      , @msg      nvarchar(2048)
+      , @i        int = 1;
+
+WHILE @i <= 3
 BEGIN
-    PRINT 'Dropping existing eds_raw...';
-    DROP EXTERNAL DATA SOURCE eds_raw;
+    SELECT @name = CASE @i WHEN 1 THEN 'eds_raw'
+                           WHEN 2 THEN 'eds_curated'
+                           ELSE        'eds_sandbox' END
+         , @want = CASE @i WHEN 1 THEN N'$(RawLocation)'
+                           WHEN 2 THEN N'$(CuratedLocation)'
+                           ELSE        N'$(SandboxLocation)' END;
+
+    /* Advanced before any CONTINUE below, or the unchanged case loops forever. */
+    SET @i += 1;
+
+    SET @have = (SELECT location FROM sys.external_data_sources WHERE name = @name);
+
+    /* Already correct. sys.external_data_sources stores the location exactly as
+       it was supplied - no normalisation, no trailing slash - so this is a
+       straight comparison rather than a fuzzy one. */
+    IF @have IS NOT NULL AND @have = @want
+    BEGIN
+        PRINT '  ' + @name + ' -> ' + @have + '  (unchanged, left alone)';
+        CONTINUE;
+    END
+
+    IF @have IS NOT NULL
+    BEGIN
+        /* Genuinely moving. Name the dependants rather than letting the DROP
+           fail with a message that mentions only the first one it happens to
+           find. Seeded with a MAX-typed empty string: an nvarchar(n) seed would
+           silently truncate the list at 4000 characters. */
+        SET @deps = NULL;
+
+        SELECT @deps = COALESCE(@deps + N', ', CAST(N'' AS nvarchar(max)))
+                     + QUOTENAME(s.name) + N'.' + QUOTENAME(t.name)
+        FROM sys.external_tables t
+        JOIN sys.schemas s
+          ON s.schema_id = t.schema_id
+        JOIN sys.external_data_sources ds
+          ON ds.data_source_id = t.data_source_id
+        WHERE ds.name = @name;
+
+        IF @deps IS NOT NULL
+        BEGIN
+            SET @msg = @name + N' must move from ' + @have + N' to ' + @want
+                     + N', but these external tables still reference it: ' + @deps
+                     + N'. They describe files in the old account, so drop them first: '
+                     + N'see docs/12-troubleshooting.md#external-data-source-in-use.';
+            RAISERROR (@msg, 16, 1);
+            RETURN;
+        END
+
+        PRINT '  ' + @name + ' moving from ' + @have + ' to ' + @want + ' - dropping...';
+        SET @sql = N'DROP EXTERNAL DATA SOURCE ' + QUOTENAME(@name) + N';';
+        EXEC sp_executesql @sql;
+    END
+
+    /* LOCATION will not accept a variable, so the statement is assembled and
+       executed dynamically. The name comes from the fixed list above, and the
+       location is escaped, so there is nothing here an environment value can
+       break out of. */
+    SET @sql = N'CREATE EXTERNAL DATA SOURCE ' + QUOTENAME(@name) + N'
+                 WITH (
+                     LOCATION   = ''' + REPLACE(@want, '''', '''''') + N''',
+                     CREDENTIAL = cred_LakeManagedIdentity
+                 );';
+    EXEC sp_executesql @sql;
+
+    PRINT '  ' + @name + ' -> ' + @want + '  (created)';
 END
-GO
-
-CREATE EXTERNAL DATA SOURCE eds_raw
-WITH (
-    LOCATION   = '$(RawLocation)',
-    CREDENTIAL = cred_LakeManagedIdentity
-);
-GO
-
-/* ---------------------------------------------------------------------------
-   eds_curated - CETAS writes here. The workspace managed identity needs
-   Storage Blob Data CONTRIBUTOR (not Reader) on the account for that to work.
-   --------------------------------------------------------------------------- */
-IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = 'eds_curated')
-BEGIN
-    PRINT 'Dropping existing eds_curated...';
-    DROP EXTERNAL DATA SOURCE eds_curated;
-END
-GO
-
-CREATE EXTERNAL DATA SOURCE eds_curated
-WITH (
-    LOCATION   = '$(CuratedLocation)',
-    CREDENTIAL = cred_LakeManagedIdentity
-);
-GO
-
-/* ---------------------------------------------------------------------------
-   eds_sandbox - analyst scratch. Lifecycle-deleted after 30 days by the
-   storage management policy in infra/terraform/modules/storage.
-   --------------------------------------------------------------------------- */
-IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = 'eds_sandbox')
-BEGIN
-    PRINT 'Dropping existing eds_sandbox...';
-    DROP EXTERNAL DATA SOURCE eds_sandbox;
-END
-GO
-
-CREATE EXTERNAL DATA SOURCE eds_sandbox
-WITH (
-    LOCATION   = '$(SandboxLocation)',
-    CREDENTIAL = cred_LakeManagedIdentity
-);
 GO
 
 PRINT 'External data sources:';

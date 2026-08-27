@@ -561,15 +561,31 @@ native error names neither the folder nor the fix.
 
 ### `Cannot drop the external data source ... it is used by external table` {#external-data-source-in-use}
 
-Expected when the lake location has changed. Drop the dependents first:
+Only happens when the lake location has genuinely changed, and
+`030_external_data_sources.sql` names the blocking tables in the error rather
+than making you go looking for them.
+
+It used to happen on every redeploy of an environment that had ever run a
+backfill, because the script dropped and recreated all three data sources
+unconditionally and the curate procedure leaves one external table per curated
+partition on `eds_curated`. The script now compares the location first and
+leaves an unchanged data source alone, so a redeploy touches nothing.
+
+When the location really has moved, the old external tables describe files in
+the old storage account and have to go. Generate the drops for the one data
+source that is moving:
 
 ```sql
-SELECT 'DROP EXTERNAL TABLE ' + QUOTENAME(SCHEMA_NAME(schema_id)) + '.' + QUOTENAME(name) + ';'
-FROM sys.external_tables;
+SELECT 'DROP EXTERNAL TABLE ' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name) + ';'
+FROM sys.external_tables t
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+JOIN sys.external_data_sources ds ON ds.data_source_id = t.data_source_id
+WHERE ds.name = 'eds_curated';
 ```
 
 Run the generated statements, then re-run `030_external_data_sources.sql`. No
-data is lost — external tables are metadata.
+data is lost — external tables are metadata over files, and the curate
+procedure recreates them for each partition it rebuilds.
 
 ### Every `OPENROWSET` fails despite `SELECT` being granted
 
