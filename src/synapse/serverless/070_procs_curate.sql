@@ -238,20 +238,55 @@ FROM (
            exist yet. */
         , CongestionSurchargeAmount  = TRY_CAST(r.congestionSurcharge AS DECIMAL(10,2))
 
-        , SourceFileName = r.SourceFileName
+        /* FOLDER, not file. Lineage here was filename() - the exact Parquet
+           part file a row came from - and serverless rejects filename() inside
+           a CETAS just as it rejects filepath(). The column stays so that
+           nothing downstream changes shape, but it now identifies the
+           partition rather than the file. raw.vw_YellowTaxiTrip still exposes
+           the per-file value for ad-hoc queries and for
+           curated.vw_YellowTaxiTrip_Rejected, which are ordinary SELECTs and
+           may use it freely. */
+        , SourceFileName = ''nyctlc/yellow/puYear=' + CAST(@puYear AS NVARCHAR(4)) + N'/puMonth=' + CAST(@puMonth AS NVARCHAR(2)) + N'''
         , CuratedAtUtc   = SYSUTCDATETIME()
 
         , DuplicateRank = ROW_NUMBER() OVER (
               PARTITION BY r.vendorID, r.tpepPickupDateTime, r.tpepDropoffDateTime,
                            r.puLocationId, r.doLocationId, r.totalAmount
-              ORDER BY r.SourceFileName)
-    FROM raw.vw_YellowTaxiTrip AS r
+              /* Was ORDER BY r.SourceFileName - filename() again. Within one
+                 partition every duplicate is an exact copy by the natural key
+                 above, so which survives is arbitrary either way; this just
+                 states it. */
+              ORDER BY (SELECT NULL))
+    FROM OPENROWSET(
+             BULK ''nyctlc/yellow/puYear=' + CAST(@puYear AS NVARCHAR(4)) + N'/puMonth=' + CAST(@puMonth AS NVARCHAR(2)) + N'/*.parquet'',
+             DATA_SOURCE = ''eds_raw'',
+             FORMAT = ''PARQUET''
+         )
+         WITH (
+             vendorID             VARCHAR(10),
+             tpepPickupDateTime   DATETIME2(7),
+             tpepDropoffDateTime  DATETIME2(7),
+             passengerCount       INT,
+             tripDistance         FLOAT,
+             puLocationId         VARCHAR(10),
+             doLocationId         VARCHAR(10),
+             rateCodeId           INT,
+             storeAndFwdFlag      VARCHAR(1),
+             paymentType          VARCHAR(10),
+             fareAmount           FLOAT,
+             extra                FLOAT,
+             mtaTax               FLOAT,
+             improvementSurcharge VARCHAR(20),
+             tipAmount            FLOAT,
+             tollsAmount          FLOAT,
+             totalAmount          FLOAT,
+             congestionSurcharge  FLOAT
+         ) AS r
     WHERE
-        /* Folder-level pruning. Cheap: serverless skips other folders without
-           opening a file. */
-            r.PickupYear  = ' + CAST(@puYear AS NVARCHAR(4)) + N'
-        AND r.PickupMonth = ' + CAST(@puMonth AS NVARCHAR(2)) + N'
-
+        /* No folder-level predicate here any more: the BULK path above names
+           the single partition, so serverless opens nothing else. That used to
+           read r.PickupYear/r.PickupMonth, which the view derives from
+           filepath() - and filepath() cannot appear in a CETAS at all. */
         /* Row-level partition truth. See "PARTITION LEAKAGE" in the header. */
         AND r.tpepPickupDateTime >= DATEFROMPARTS(' + CAST(@puYear AS NVARCHAR(4)) + N', ' + CAST(@puMonth AS NVARCHAR(2)) + N', 1)
         AND r.tpepPickupDateTime <  DATEADD(MONTH, 1, DATEFROMPARTS(' + CAST(@puYear AS NVARCHAR(4)) + N', ' + CAST(@puMonth AS NVARCHAR(2)) + N', 1))
