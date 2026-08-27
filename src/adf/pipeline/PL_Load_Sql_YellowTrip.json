@@ -332,8 +332,8 @@
                 }
             },
             {
-                "name": "Fail Load",
-                "description": "Closes the audit row as Failed. dependsOn lists EVERY activity that can fail after the audit row is opened, each with dependencyCondition Failed - ADF treats multiple dependencies as AND by default, but a Failed condition only fires for the branch that actually failed, so this behaves as the OR you want. Without this activity a crashed run leaves meta.LoadAudit permanently 'Running' and the next run's duplicate-run guard blocks it.",
+                "name": "Fail Load After Staging",
+                "description": "Closes the audit row as Failed. There is one of these per activity that can fail after the audit row is opened, because ADF ANDs multiple dependsOn entries: a single handler listing all three predecessors with Failed can only run if all three fail, which cannot happen in a sequential chain, so it never ran at all. That left meta.LoadAudit permanently 'Running' and the duplicate-run guard blocked every later load of the partition. Multiple conditions on ONE activity are OR; conditions across activities are AND.",
                 "type": "SqlServerStoredProcedure",
                 "dependsOn": [
                     {
@@ -341,13 +341,137 @@
                         "dependencyConditions": [
                             "Failed"
                         ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:30:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_AzureSql_Edw",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_Complete_Load]",
+                    "storedProcedureParameters": {
+                        "LoadId": {
+                            "value": {
+                                "value": "@activity('Start Load').output.firstRow.LoadId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "Status": {
+                            "value": "Failed",
+                            "type": "String"
+                        },
+                        "Message": {
+                            "value": {
+                                "value": "@concat('Run ', pipeline().RunId, ' failed. Inspect ADFActivityRun in Log Analytics for the error detail.')",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "Surface Staging Failure",
+                "description": "Re-raises the failure the handler above just recorded. Without this the pipeline reports Succeeded: ADF considers a failure whose failure-path runs successfully to be handled, so closing the audit row would have swallowed the error and reported a green backfill.",
+                "type": "Fail",
+                "dependsOn": [
+                    {
+                        "activity": "Fail Load After Staging",
+                        "dependencyConditions": [
+                            "Succeeded",
+                            "Failed"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "message": {
+                        "value": "@concat('Load of ', pipeline().parameters.puYear, '-', pipeline().parameters.puMonth, ' failed at Load Staging Table. Audit row closed. See ADFActivityRun in Log Analytics for run ', pipeline().RunId, '.')",
+                        "type": "Expression"
                     },
+                    "errorCode": "LoadFailed"
+                }
+            },
+            {
+                "name": "Fail Load After Merge",
+                "description": "Closes the audit row as Failed. There is one of these per activity that can fail after the audit row is opened, because ADF ANDs multiple dependsOn entries: a single handler listing all three predecessors with Failed can only run if all three fail, which cannot happen in a sequential chain, so it never ran at all. That left meta.LoadAudit permanently 'Running' and the duplicate-run guard blocked every later load of the partition. Multiple conditions on ONE activity are OR; conditions across activities are AND.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
                     {
                         "activity": "Merge Into Fact",
                         "dependencyConditions": [
                             "Failed"
                         ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:30:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_AzureSql_Edw",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_Complete_Load]",
+                    "storedProcedureParameters": {
+                        "LoadId": {
+                            "value": {
+                                "value": "@activity('Start Load').output.firstRow.LoadId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "Status": {
+                            "value": "Failed",
+                            "type": "String"
+                        },
+                        "Message": {
+                            "value": {
+                                "value": "@concat('Run ', pipeline().RunId, ' failed. Inspect ADFActivityRun in Log Analytics for the error detail.')",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "Surface Merge Failure",
+                "description": "Re-raises the failure the handler above just recorded. Without this the pipeline reports Succeeded: ADF considers a failure whose failure-path runs successfully to be handled, so closing the audit row would have swallowed the error and reported a green backfill.",
+                "type": "Fail",
+                "dependsOn": [
+                    {
+                        "activity": "Fail Load After Merge",
+                        "dependencyConditions": [
+                            "Succeeded",
+                            "Failed"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "message": {
+                        "value": "@concat('Load of ', pipeline().parameters.puYear, '-', pipeline().parameters.puMonth, ' failed at Merge Into Fact. Audit row closed. See ADFActivityRun in Log Analytics for run ', pipeline().RunId, '.')",
+                        "type": "Expression"
                     },
+                    "errorCode": "LoadFailed"
+                }
+            },
+            {
+                "name": "Fail Load After Quality",
+                "description": "Closes the audit row as Failed. There is one of these per activity that can fail after the audit row is opened, because ADF ANDs multiple dependsOn entries: a single handler listing all three predecessors with Failed can only run if all three fail, which cannot happen in a sequential chain, so it never ran at all. That left meta.LoadAudit permanently 'Running' and the duplicate-run guard blocked every later load of the partition. Multiple conditions on ONE activity are OR; conditions across activities are AND.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
                     {
                         "activity": "Run Data Quality Checks",
                         "dependencyConditions": [
@@ -388,6 +512,27 @@
                             "type": "String"
                         }
                     }
+                }
+            },
+            {
+                "name": "Surface Quality Failure",
+                "description": "Re-raises the failure the handler above just recorded. Without this the pipeline reports Succeeded: ADF considers a failure whose failure-path runs successfully to be handled, so closing the audit row would have swallowed the error and reported a green backfill.",
+                "type": "Fail",
+                "dependsOn": [
+                    {
+                        "activity": "Fail Load After Quality",
+                        "dependencyConditions": [
+                            "Succeeded",
+                            "Failed"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "message": {
+                        "value": "@concat('Load of ', pipeline().parameters.puYear, '-', pipeline().parameters.puMonth, ' failed at Run Data Quality Checks. Audit row closed. See ADFActivityRun in Log Analytics for run ', pipeline().RunId, '.')",
+                        "type": "Expression"
+                    },
+                    "errorCode": "LoadFailed"
                 }
             }
         ]

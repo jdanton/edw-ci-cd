@@ -1,8 +1,8 @@
 # =============================================================================
 # diagnose-serverless.yml
 # =============================================================================
-# Runs one SQL statement against the Synapse serverless endpoint and prints the
-# result. Manual only.
+# Runs one SQL statement against the Synapse serverless endpoint or the Azure
+# SQL warehouse and prints the result. Manual only.
 #
 # WHY THIS EXISTS
 #
@@ -29,11 +29,18 @@
 # it manual, and prefer a committed .sql file for anything you intend to keep.
 # =============================================================================
 
-name: Diagnose serverless SQL
+name: Diagnose SQL
 
 on:
   workflow_dispatch:
     inputs:
+      target:
+        description: 'Which engine to query'
+        required: true
+        default: 'serverless'
+        type: choice
+        options: [serverless, sql]
+
       environment:
         description: 'Target environment'
         required: true
@@ -42,15 +49,15 @@ on:
         options: [dev, test, prod]
 
       query:
-        description: 'SQL to run. Runs against edw_lake unless you USE another database.'
+        description: 'SQL to run. Against the database below, or that engine default.'
         required: true
         default: 'SELECT TOP (5) * FROM curated.vw_YellowTaxiTrip;'
         type: string
 
       database:
-        description: 'Database to connect to'
+        description: 'Database to connect to. Blank uses edw_lake (serverless) or the warehouse (sql).'
         required: false
-        default: 'edw_lake'
+        default: ''
         type: string
 
 permissions:
@@ -58,7 +65,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: diagnose-serverless-${{ inputs.environment }}
+  group: diagnose-${{ inputs.target }}-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
@@ -106,13 +113,27 @@ jobs:
           Import-Module SqlServer -Force
 
           Push-Location infra/terraform
-          try { $ctx = terraform output -json serverless_deployment_context | ConvertFrom-Json }
+          try {
+            if ('${{ inputs.target }}' -eq 'sql') {
+              $server   = terraform output -raw sql_server_fqdn
+              $database = terraform output -raw sql_database_name
+            }
+            else {
+              $ctx      = terraform output -json serverless_deployment_context | ConvertFrom-Json
+              $server   = $ctx.serverlessEndpoint
+              $database = 'edw_lake'
+            }
+          }
           finally { Pop-Location }
+
+          # An explicit database always wins over the per-engine default.
+          if ('${{ inputs.database }}'.Trim()) { $database = '${{ inputs.database }}'.Trim() }
 
           $token = az account get-access-token --resource 'https://database.windows.net/' --query accessToken -o tsv
 
-          Write-Host "endpoint : $($ctx.serverlessEndpoint)"
-          Write-Host "database : ${{ inputs.database }}"
+          Write-Host "engine   : ${{ inputs.target }}"
+          Write-Host "endpoint : $server"
+          Write-Host "database : $database"
           Write-Host '--- query ---'
           Write-Host @'
           ${{ inputs.query }}
@@ -120,8 +141,8 @@ jobs:
           Write-Host '--- result ---'
 
           $rows = Invoke-SqlWithRetry -Activity 'diagnostic query' -ScriptBlock {
-              Invoke-Sqlcmd -ServerInstance $ctx.serverlessEndpoint `
-                            -Database '${{ inputs.database }}' `
+              Invoke-Sqlcmd -ServerInstance $server `
+                            -Database $database `
                             -AccessToken $token `
                             -Query @'
           ${{ inputs.query }}
