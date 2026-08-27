@@ -252,6 +252,45 @@ resource "azurerm_synapse_workspace_sql_aad_admin" "this" {
 }
 
 # ---------------------------------------------------------------------------
+# SYNAPSE RBAC - the third permission system, and the one nothing else covers.
+#
+# Azure RBAC governs the resource. The two admin blocks above govern the SQL
+# endpoints. NEITHER grants anything in Synapse Studio, which is governed by
+# Synapse RBAC - a separate store, seeded with exactly one assignment: whoever
+# CREATED the workspace.
+#
+# Here the creator is the deployment service principal, because Terraform makes
+# the workspace. So CI could publish artifacts through the Dev API from day one
+# while every human - including a subscription Owner who is a member of the
+# Entra admin group - got
+#
+#   Failed to load one or more resources due to no access, error code 403
+#
+# on every dataset, pipeline and linked service, and could not query the
+# serverless endpoint either. Nothing in the platform said why, because from
+# Azure RBAC's point of view they had everything.
+#
+# Granting the admin group Synapse Administrator is what closes that. Without
+# this resource a freshly built environment ships locked to its own pipeline.
+#
+# This is a DEV-API call: it needs the workspace endpoint to be reachable, so it
+# only works from the self-hosted runner (or any host on a linked VNet), and it
+# is ordered after the private endpoints for that reason.
+# ---------------------------------------------------------------------------
+
+resource "azurerm_synapse_role_assignment" "admins" {
+  synapse_workspace_id = azurerm_synapse_workspace.this.id
+  role_name            = "Synapse Administrator"
+  principal_id         = var.aad_admin_object_id
+  principal_type       = "Group"
+
+  depends_on = [
+    azurerm_private_endpoint.workspace,
+    azurerm_synapse_workspace_aad_admin.this,
+  ]
+}
+
+# ---------------------------------------------------------------------------
 # Workspace private endpoints (into OUR spoke VNet)
 #
 # Direction: caller -> Synapse. These are what let the self-hosted runner, and
