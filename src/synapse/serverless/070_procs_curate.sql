@@ -168,10 +168,15 @@ WITH (
     FILE_FORMAT = ff_parquet_snappy
 )
 AS
+/* PickupYear and PickupMonth are deliberately NOT written into the file. They
+   are already in the folder names, curated.vw_YellowTaxiTrip recovers them with
+   filepath(), and that view WITH clause - the definition of this file format -
+   lists exactly the columns below. Writing them as columns too made the curated
+   Parquet disagree with both the view and stg.YellowTaxiTrip, and the ADF copy
+   (which reads the files directly, partition discovery off, mapping by name)
+   failed with "Column 'PickupYear' does not exist in the target table". */
 SELECT
-      PickupYear
-    , PickupMonth
-    , TripKey
+      TripKey
     , VendorId
     , PickupDateTime
     , DropoffDateTime
@@ -196,13 +201,11 @@ SELECT
     , CuratedAtUtc
 FROM (
     SELECT
-          PickupYear  = ' + CAST(@puYear AS NVARCHAR(4)) + N'
-        , PickupMonth = ' + CAST(@puMonth AS NVARCHAR(2)) + N'
-
-        /* Deterministic surrogate. A hash of the natural key means the same
+        /* FIRST item, so no leading comma - the partition literals that used to
+           head this list are gone. Deterministic surrogate. A hash of the natural key means the same
            trip gets the same key on every rebuild, in every environment,
            which is what makes the Azure SQL merge idempotent. */
-        , TripKey = CONVERT(BINARY(16), HASHBYTES(''MD5'',
+          TripKey = CONVERT(BINARY(16), HASHBYTES(''MD5'',
               CONCAT_WS(''|'',
                   ISNULL(r.vendorID, ''''),
                   CONVERT(VARCHAR(27), r.tpepPickupDateTime, 121),
