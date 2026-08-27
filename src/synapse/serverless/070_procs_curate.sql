@@ -287,8 +287,10 @@ FROM (
            the single partition, so serverless opens nothing else. That used to
            read r.PickupYear/r.PickupMonth, which the view derives from
            filepath() - and filepath() cannot appear in a CETAS at all. */
-        /* Row-level partition truth. See "PARTITION LEAKAGE" in the header. */
-        AND r.tpepPickupDateTime >= DATEFROMPARTS(' + CAST(@puYear AS NVARCHAR(4)) + N', ' + CAST(@puMonth AS NVARCHAR(2)) + N', 1)
+        /* Row-level partition truth. See "PARTITION LEAKAGE" in the header.
+           FIRST predicate in the WHERE, so no leading AND: the folder-level
+           pair that used to sit above it is gone. */
+            r.tpepPickupDateTime >= DATEFROMPARTS(' + CAST(@puYear AS NVARCHAR(4)) + N', ' + CAST(@puMonth AS NVARCHAR(2)) + N', 1)
         AND r.tpepPickupDateTime <  DATEADD(MONTH, 1, DATEFROMPARTS(' + CAST(@puYear AS NVARCHAR(4)) + N', ' + CAST(@puMonth AS NVARCHAR(2)) + N', 1))
 
         /* Quality predicates. Each one maps to a named reason in
