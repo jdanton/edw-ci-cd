@@ -59,18 +59,30 @@ BEGIN
           AND Status = 'Running'
     )
     BEGIN
-        DECLARE @existingRunId VARCHAR(50) = (
-            SELECT TOP (1) PipelineRunId
-            FROM meta.LoadAudit
-            WHERE TargetObject = @TargetObject
-              AND ISNULL(PartitionKey, '') = ISNULL(@PartitionKey, '')
-              AND Status = 'Running'
-            ORDER BY StartedAtUtc DESC
-        );
+        DECLARE @existingRunId  VARCHAR(50)
+              , @existingStarted DATETIME2(3);
+
+        SELECT TOP (1) @existingRunId  = PipelineRunId
+                     , @existingStarted = StartedAtUtc
+        FROM meta.LoadAudit
+        WHERE TargetObject = @TargetObject
+          AND ISNULL(PartitionKey, '') = ISNULL(@PartitionKey, '')
+          AND Status = 'Running'
+        ORDER BY StartedAtUtc DESC;
+
+        /* Say when the row will clear itself. The reaper above is the supported
+           recovery path, but an error that only suggests editing meta.LoadAudit
+           invites hand-editing the audit trail - which is exactly what happened
+           the first time this fired, an hour into a four-hour lease. */
+        DECLARE @startedText VARCHAR(30) = CONVERT(VARCHAR(30), @existingStarted, 120);
+
+        DECLARE @reapAtUtc VARCHAR(30) = CONVERT(
+            VARCHAR(30), DATEADD(MINUTE, @StaleAfterMinutes, @existingStarted), 120);
 
         RAISERROR(
-            'A load of %s partition %s is already Running (ADF run %s). Wait for it to finish, or mark it Failed in meta.LoadAudit if you know it is dead.',
-            16, 1, @TargetObject, @PartitionKey, @existingRunId);
+            'A load of %s partition %s is already Running (ADF run %s, started %s UTC). If that run is alive, wait for it. If it is dead, it is reaped automatically at %s UTC and the next attempt succeeds; only edit meta.LoadAudit by hand if you cannot wait that long.',
+            16, 1, @TargetObject, @PartitionKey, @existingRunId,
+            @startedText, @reapAtUtc);
         RETURN;
     END
 

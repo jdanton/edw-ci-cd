@@ -49,7 +49,9 @@ BEGIN
             @threshold       BIGINT,
             @failedCount     BIGINT,
             @blockingFailures INT = 0,
-            @failureSummary  NVARCHAR(2000) = N'';
+            @failureSummary  NVARCHAR(2000) = N'',
+            @ruleError       NVARCHAR(2048),
+            @firstError      NVARCHAR(2048);
 
     DECLARE @results TABLE (FailedCount BIGINT);
 
@@ -113,15 +115,34 @@ BEGIN
         BEGIN CATCH
             /* One broken rule must not abort the remaining checks - you want
                the full picture of what is wrong, not just the first thing. */
+            SET @ruleError = ERROR_MESSAGE();
+
             INSERT INTO meta.DataQualityResult
                 (LoadId, RuleId, PickupYear, PickupMonth, FailedCount, Passed, Severity, Message)
             VALUES
                 (@LoadId, @ruleId, @PickupYear, @PickupMonth, -1, 0, @severity,
-                 LEFT(CONCAT('Rule execution error: ', ERROR_MESSAGE()), 2000));
+                 LEFT(CONCAT('Rule execution error: ', @ruleError), 2000));
 
             IF @severity = 'Blocking'
             BEGIN
                 SET @blockingFailures = @blockingFailures + 1;
+
+                /* Carry the first error text into the summary, not just the
+                   word "error".
+
+                   Broken rules nearly always break for the same reason at the
+                   same time - one missing grant, one renamed column - so the
+                   first message is almost always the whole story, and repeating
+                   it nine times would only crowd out the rule names.
+
+                   This is the message ADF surfaces and the one that lands in
+                   meta.LoadAudit, so whatever is omitted here is what somebody
+                   has to go digging for. The first time this fired it read
+                   "NoNullTripKey (error)", which cost an afternoon to trace
+                   back to a permission denial the database had already written
+                   into meta.DataQualityResult.Message. */
+                IF @firstError IS NULL SET @firstError = @ruleError;
+
                 SET @failureSummary = CONCAT(@failureSummary, @ruleName, ' (error); ');
             END
         END CATCH
@@ -134,13 +155,24 @@ BEGIN
 
     IF @blockingFailures > 0
     BEGIN
+        /* Trimmed hard: this has to fit beside the rule names in a 2000-char
+           audit Message, and the point is to identify the fault, not to
+           reproduce the full text - which is in meta.DataQualityResult intact. */
+        DECLARE @errorNote NVARCHAR(600) =
+            CASE WHEN @firstError IS NULL THEN N''
+                 ELSE CONCAT(N'First error: ', LEFT(@firstError, 400), N' ')
+            END;
+
         UPDATE meta.LoadAudit
-        SET Message = LEFT(CONCAT('Data quality failures: ', @failureSummary), 2000)
+        SET Message = LEFT(CONCAT('Data quality failures: ', @failureSummary, @errorNote), 2000)
         WHERE LoadId = @LoadId;
 
+        /* @failureSummary and @errorNote go in as ARGUMENTS, never as part of
+           the format string: a rule name or an error message containing a '%'
+           would otherwise be read as a format specifier. */
         RAISERROR(
-            '%d blocking data quality rule(s) failed for partition %d-%d: %s Query meta.DataQualityResult WHERE LoadId = %I64d for detail.',
-            16, 1, @blockingFailures, @PickupYear, @PickupMonth, @failureSummary, @LoadId);
+            '%d blocking data quality rule(s) failed for partition %d-%d: %s%sQuery meta.DataQualityResult WHERE LoadId = %I64d for detail.',
+            16, 1, @blockingFailures, @PickupYear, @PickupMonth, @failureSummary, @errorNote, @LoadId);
         RETURN;
     END
 

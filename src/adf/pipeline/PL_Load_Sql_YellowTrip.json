@@ -333,7 +333,7 @@
             },
             {
                 "name": "Fail Load After Staging",
-                "description": "Closes the audit row as Failed. There is one of these per activity that can fail after the audit row is opened, because ADF ANDs multiple dependsOn entries: a single handler listing all three predecessors with Failed can only run if all three fail, which cannot happen in a sequential chain, so it never ran at all. That left meta.LoadAudit permanently 'Running' and the duplicate-run guard blocked every later load of the partition. Multiple conditions on ONE activity are OR; conditions across activities are AND.",
+                "description": "Closes the audit row as Failed. There is one of these per activity that can fail after the audit row is opened, because ADF ANDs multiple dependsOn entries: a single handler listing all three predecessors with Failed can only run if all three fail, which cannot happen in a sequential chain, so it never ran at all. Multiple conditions on ONE activity are OR; conditions across activities are AND. Without these, meta.LoadAudit stays 'Running' and the duplicate-run guard blocks the partition until etl.usp_Start_Load reaps the row - correct, but four hours away, so the failure path closes it in seconds instead.",
                 "type": "SqlServerStoredProcedure",
                 "dependsOn": [
                     {
@@ -401,7 +401,7 @@
             },
             {
                 "name": "Fail Load After Merge",
-                "description": "Closes the audit row as Failed. There is one of these per activity that can fail after the audit row is opened, because ADF ANDs multiple dependsOn entries: a single handler listing all three predecessors with Failed can only run if all three fail, which cannot happen in a sequential chain, so it never ran at all. That left meta.LoadAudit permanently 'Running' and the duplicate-run guard blocked every later load of the partition. Multiple conditions on ONE activity are OR; conditions across activities are AND.",
+                "description": "Closes the audit row as Failed. There is one of these per activity that can fail after the audit row is opened, because ADF ANDs multiple dependsOn entries: a single handler listing all three predecessors with Failed can only run if all three fail, which cannot happen in a sequential chain, so it never ran at all. Multiple conditions on ONE activity are OR; conditions across activities are AND. Without these, meta.LoadAudit stays 'Running' and the duplicate-run guard blocks the partition until etl.usp_Start_Load reaps the row - correct, but four hours away, so the failure path closes it in seconds instead.",
                 "type": "SqlServerStoredProcedure",
                 "dependsOn": [
                     {
@@ -469,7 +469,7 @@
             },
             {
                 "name": "Fail Load After Quality",
-                "description": "Closes the audit row as Failed. There is one of these per activity that can fail after the audit row is opened, because ADF ANDs multiple dependsOn entries: a single handler listing all three predecessors with Failed can only run if all three fail, which cannot happen in a sequential chain, so it never ran at all. That left meta.LoadAudit permanently 'Running' and the duplicate-run guard blocked every later load of the partition. Multiple conditions on ONE activity are OR; conditions across activities are AND.",
+                "description": "Closes the audit row as Failed. There is one of these per activity that can fail after the audit row is opened, because ADF ANDs multiple dependsOn entries: a single handler listing all three predecessors with Failed can only run if all three fail, which cannot happen in a sequential chain, so it never ran at all. Multiple conditions on ONE activity are OR; conditions across activities are AND. Without these, meta.LoadAudit stays 'Running' and the duplicate-run guard blocks the partition until etl.usp_Start_Load reaps the row - correct, but four hours away, so the failure path closes it in seconds instead.",
                 "type": "SqlServerStoredProcedure",
                 "dependsOn": [
                     {

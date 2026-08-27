@@ -180,7 +180,11 @@ GO
      etl   EXECUTE                 (the load procedures)
      meta  SELECT                  (Lookup reads LoadId back)
      dim   SELECT                  (the merge joins to resolve keys)
-     fact  nothing directly        (only through etl.*)
+     fact  SELECT                  (data quality rules only - see below)
+
+   Writing to fact is still impossible: SELECT is read-only, and every write
+   goes through etl.usp_Merge_YellowTaxiTrip, so the empty-staging guard cannot
+   be bypassed.
    --------------------------------------------------------------------------- */
 DECLARE @principal2 SYSNAME = N'$(DataFactoryName)';
 DECLARE @grant NVARCHAR(MAX);
@@ -203,7 +207,30 @@ BEGIN
     SET @grant = N'GRANT ALTER ON OBJECT::stg.YellowTaxiTrip TO ' + QUOTENAME(@principal2) + N';';
     EXEC sp_executesql @grant;
 
-    PRINT CONCAT('  Granted stg/etl/meta/dim permissions to [', @principal2, '].');
+    /* Read on fact, for the data quality gate and nothing else.
+
+       This grant looks removable: no code path visible anywhere in the repo
+       SELECTs fact.* as this identity. etl.usp_Merge_YellowTaxiTrip reads and
+       writes it, but that is static SQL inside a dbo-owned procedure, so
+       ownership chaining covers it and EXECUTE on etl is enough - which is
+       exactly why fact was left out of the list above.
+
+       etl.usp_RunDataQualityChecks is the exception. Data quality rules are
+       rows in meta.DataQualityRule, so it runs each rule's text through
+       sp_executesql - and ownership chaining does not extend to dynamic SQL.
+       The rule executes as the caller, so ADF needs its own SELECT.
+
+       Without this, every rule fails identically and the load dies after the
+       merge has already committed:
+
+         Rule execution error: The SELECT permission was denied on the object
+         'YellowTaxiTrip', database 'edw', schema 'fact'.
+
+       Do not remove it because nothing appears to use it. */
+    SET @grant = N'GRANT SELECT ON SCHEMA::fact TO ' + QUOTENAME(@principal2) + N';';
+    EXEC sp_executesql @grant;
+
+    PRINT CONCAT('  Granted stg/etl/meta/dim/fact permissions to [', @principal2, '].');
 END
 GO
 
