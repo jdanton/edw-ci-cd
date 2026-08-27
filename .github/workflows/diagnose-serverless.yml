@@ -1,0 +1,132 @@
+# =============================================================================
+# diagnose-serverless.yml
+# =============================================================================
+# Runs one SQL statement against the Synapse serverless endpoint and prints the
+# result. Manual only.
+#
+# WHY THIS EXISTS
+#
+# The serverless endpoint is private, so it cannot be queried from a laptop -
+# every question about it otherwise costs a full pipeline run to answer. During
+# the first end-to-end bring-up that meant six-minute cycles to test one-line
+# hypotheses, and a wrong hypothesis cost a redesign.
+#
+# Serverless is also where the least portable SQL lives. CETAS in particular
+# rejects constructs that are perfectly legal elsewhere, always with the same
+# unhelpful sentence:
+#
+#   The query references an object that is not supported in distributed
+#   processing mode.
+#
+# It names neither the object nor the construct. Bisecting a statement against
+# the real endpoint is the only reliable way to find out which part it means.
+#
+# WHAT IT IS NOT
+#
+# Not part of any deployment path, and not a way to change anything: it runs as
+# the environment's deployment identity, which already holds sysadmin there, so
+# it grants no new capability - it only makes an existing one convenient. Keep
+# it manual, and prefer a committed .sql file for anything you intend to keep.
+# =============================================================================
+
+name: Diagnose serverless SQL
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, test, prod]
+
+      query:
+        description: 'SQL to run. Runs against edw_lake unless you USE another database.'
+        required: true
+        default: 'SELECT TOP (5) * FROM curated.vw_YellowTaxiTrip;'
+        type: string
+
+      database:
+        description: 'Database to connect to'
+        required: false
+        default: 'edw_lake'
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: diagnose-serverless-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  query:
+    name: ${{ inputs.environment }}
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+
+    env:
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: terraform init (read outputs)
+        working-directory: infra/terraform
+        run: |
+          terraform init -reconfigure -no-color \
+            -backend-config=envs/${{ inputs.environment }}/backend.hcl
+
+      - name: Run it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./scripts/_Tooling.ps1      # Invoke-SqlWithRetry: the pool may be cold
+
+          if (-not (Get-Module -ListAvailable -Name SqlServer)) {
+            Install-Module SqlServer -Scope CurrentUser -Force -AllowClobber -MinimumVersion 22.0.0
+          }
+          Import-Module SqlServer -Force
+
+          Push-Location infra/terraform
+          try { $ctx = terraform output -json serverless_deployment_context | ConvertFrom-Json }
+          finally { Pop-Location }
+
+          $token = az account get-access-token --resource 'https://database.windows.net/' --query accessToken -o tsv
+
+          Write-Host "endpoint : $($ctx.serverlessEndpoint)"
+          Write-Host "database : ${{ inputs.database }}"
+          Write-Host '--- query ---'
+          Write-Host @'
+          ${{ inputs.query }}
+          '@
+          Write-Host '--- result ---'
+
+          $rows = Invoke-SqlWithRetry -Activity 'diagnostic query' -ScriptBlock {
+              Invoke-Sqlcmd -ServerInstance $ctx.serverlessEndpoint `
+                            -Database '${{ inputs.database }}' `
+                            -AccessToken $token `
+                            -Query @'
+          ${{ inputs.query }}
+          '@ `
+                            -QueryTimeout 600 -ConnectionTimeout 60 -Verbose 4>&1
+          }
+
+          $rows | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
