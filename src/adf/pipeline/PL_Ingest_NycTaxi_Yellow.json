@@ -95,6 +95,7 @@
                         "referenceName": "DS_OpenDatasets_NycTlc_Binary",
                         "type": "DatasetReference",
                         "parameters": {
+                            "container": "nyctlc",
                             "folderPath": {
                                 "value": "@variables('sourceFolder')",
                                 "type": "Expression"
@@ -193,6 +194,7 @@
                                     "referenceName": "DS_OpenDatasets_NycTlc_Binary",
                                     "type": "DatasetReference",
                                     "parameters": {
+                                        "container": "nyctlc",
                                         "folderPath": " "
                                     }
                                 }
