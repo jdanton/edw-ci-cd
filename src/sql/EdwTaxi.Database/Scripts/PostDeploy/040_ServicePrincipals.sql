@@ -69,11 +69,23 @@ BEGIN
        fails with "Login failed for user '<token-identified principal>'" -
        which reads as a permissions problem rather than a wrong SID. Drop it and
        let it be recreated correctly. */
-    IF @sid IS NOT NULL
-       AND EXISTS (SELECT 1 FROM sys.database_principals
-                   WHERE name = @principal AND type IN ('E','X') AND sid <> @sid)
+    IF EXISTS (SELECT 1 FROM sys.database_principals
+               WHERE name = @principal AND type IN ('E','X'))
+       AND (
+            /* known-wrong: the SID does not belong to this identity */
+            (@sid IS NOT NULL AND EXISTS (SELECT 1 FROM sys.database_principals
+                                          WHERE name = @principal AND sid <> @sid))
+            /* or unverifiable: no client id to compare against. Recreating is
+               the safe direction. A user with the right name and the wrong SID
+               passes every check that looks for the name - including the
+               verification at the end of this deployment - while ADF fails on
+               every activity. Recreating costs a dropped-and-regranted user on
+               deployments that cannot verify; keeping one costs a silent
+               outage. */
+         OR @sid IS NULL
+       )
     BEGIN
-        PRINT CONCAT('  [', @principal, '] exists with a different SID - recreating.');
+        PRINT CONCAT('  [', @principal, '] exists but its SID cannot be confirmed - recreating.');
         SET @sql = N'DROP USER ' + QUOTENAME(@principal) + N';';
         EXEC sp_executesql @sql;
     END

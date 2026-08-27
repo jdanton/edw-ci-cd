@@ -136,12 +136,17 @@ jobs:
         run: |
           set -uo pipefail
           client_id=$(az ad sp show --id "${{ steps.target.outputs.adf_principal_id }}" --query appId -o tsv 2>/dev/null || true)
+
+          # Emit the WHOLE argument or nothing. sqlpackage rejects an empty
+          # value outright - "The specified property 'DataFactoryClientId=' is
+          # not valid" - so an unresolved id must leave no /v: behind at all.
           if [ -z "$client_id" ]; then
-            echo "::notice::Could not resolve a client id for ${{ steps.target.outputs.adf_principal_id }}; 040 will use FROM EXTERNAL PROVIDER."
+            echo "::notice::No client id for ${{ steps.target.outputs.adf_principal_id }}: the deployment identity has no Microsoft Graph read, which is expected. 040 will use FROM EXTERNAL PROVIDER, which needs Directory Readers on the SQL server identity."
+            echo "client_arg=" >> "$GITHUB_OUTPUT"
           else
             echo "Data Factory client id: $client_id"
+            echo "client_arg=/v:DataFactoryClientId=$client_id" >> "$GITHUB_OUTPUT"
           fi
-          echo "client_id=$client_id" >> "$GITHUB_OUTPUT"
 
       - name: Verify the server is reachable
         shell: pwsh
@@ -222,7 +227,7 @@ jobs:
             /AccessToken:"${{ steps.token.outputs.value }}" \
             /OutputPath:"deployreport-${{ inputs.environment }}.xml" \
             /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
-            /v:DataFactoryClientId="${{ steps.adf_identity.outputs.client_id }}" \
+            ${{ steps.adf_identity.outputs.client_arg }} \
             /v:EnvironmentName="${{ inputs.environment }}" \
             /v:DimDateStartYear=2009 \
             /v:DimDateEndYear=2035
@@ -290,7 +295,7 @@ jobs:
             /AccessToken:"${{ steps.token.outputs.value }}" \
             /OutputPath:"deployscript-${{ inputs.environment }}.sql" \
             /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
-            /v:DataFactoryClientId="${{ steps.adf_identity.outputs.client_id }}" \
+            ${{ steps.adf_identity.outputs.client_arg }} \
             /v:EnvironmentName="${{ inputs.environment }}" \
             /v:DimDateStartYear=2009 \
             /v:DimDateEndYear=2035
@@ -317,7 +322,7 @@ jobs:
             /TargetDatabaseName:"${{ steps.target.outputs.database }}" \
             /AccessToken:"${{ steps.token.outputs.value }}" \
             /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
-            /v:DataFactoryClientId="${{ steps.adf_identity.outputs.client_id }}" \
+            ${{ steps.adf_identity.outputs.client_arg }} \
             /v:EnvironmentName="${{ inputs.environment }}" \
             /v:DimDateStartYear=2009 \
             /v:DimDateEndYear=2035 \
