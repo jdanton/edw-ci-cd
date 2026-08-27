@@ -284,13 +284,13 @@ Or, equivalently, trigger the three CD workflows with `environment: dev`.
 # One month, to prove the chain.
 gh workflow run data-backfill.yml \
   -f environment=dev \
-  -f start_year_month=202401 \
-  -f end_year_month=202401 \
+  -f start_year_month=201901 \
+  -f end_year_month=201901 \
   -f initialize_reference_data=false
 ```
 
 Or from ADF Studio: run `PL_Backfill_NycTaxi_Yellow` with
-`startYearMonth=202401`, `endYearMonth=202401`.
+`startYearMonth=201901`, `endYearMonth=201901`.
 
 Fifteen to twenty-five minutes for the first month — the managed-VNet
 integration runtime pays a cold start on its first activity.

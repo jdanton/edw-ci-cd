@@ -139,7 +139,7 @@
                             "dependsOn": [],
                             "typeProperties": {
                                 "message": {
-                                    "value": "@concat('NYC TLC yellow taxi data for ', string(pipeline().parameters.puYear), '-', string(pipeline().parameters.puMonth), ' is not present in the Open Datasets container at path nyctlc/', variables('sourceFolder'), '. The TLC publishes with a two-month lag; verify the month is available before re-running.')",
+                                    "value": "@concat('NYC TLC yellow taxi data for ', string(pipeline().parameters.puYear), '-', string(pipeline().parameters.puMonth), ' is not present in the Open Datasets container at path nyctlc/', variables('sourceFolder'), '. The Azure Open Datasets MIRROR of this data is frozen, not merely lagging: it holds 2009-2019 complete, 2020 partially (months 1, 3, 8, 12), a single month of 2021, and nothing after that. Far-future puYear folders exist and are partition leakage, not data. Pick a month the mirror actually has - 2019 is the last complete year.')",
                                     "type": "Expression"
                                 },
                                 "errorCode": "SOURCE_PARTITION_NOT_PUBLISHED"

@@ -27,15 +27,15 @@ on:
         options: [dev, test, prod]
 
       start_year_month:
-        description: 'First month to load, YYYYMM (e.g. 202401)'
+        description: 'First month to load, YYYYMM. The Open Datasets mirror holds 2009-2019 complete; 2019 is the last full year.'
         required: true
-        default: '202401'
+        default: '201901'
         type: string
 
       end_year_month:
         description: 'Last month to load, inclusive, YYYYMM'
         required: true
-        default: '202401'
+        default: '201901'
         type: string
 
       initialize_reference_data:

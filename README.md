@@ -109,7 +109,7 @@ dotnet build src/sql/EdwTaxi.Database/EdwTaxi.Database.sqlproj -c Release
 # 8. Load a month of data.
 ./scripts/Initialize-ReferenceData.ps1 -Environment dev
 # then run the "Data backfill" workflow, or trigger PL_Backfill_NycTaxi_Yellow
-# in ADF Studio with startYearMonth=202401, endYearMonth=202401
+# in ADF Studio with startYearMonth=201901, endYearMonth=201901
 ```
 
 Full walkthrough: [02-bootstrap](docs/02-bootstrap.md).

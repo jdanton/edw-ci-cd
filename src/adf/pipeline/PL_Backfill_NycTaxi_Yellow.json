@@ -1,7 +1,7 @@
 {
     "name": "PL_Backfill_NycTaxi_Yellow",
     "properties": {
-        "description": "Loads a RANGE of months by generating the (year, month) pairs between startYearMonth and endYearMonth and calling PL_Master_NycTaxi_Load for each. This is how you populate a brand-new environment: trigger it once with 202401 -> 202412 and walk away. isSequential is TRUE by design; see the comment on the ForEach activity.",
+        "description": "Loads a RANGE of months by generating the (year, month) pairs between startYearMonth and endYearMonth and calling PL_Master_NycTaxi_Load for each. This is how you populate a brand-new environment: trigger it once with 201901 -> 201912 and walk away. isSequential is TRUE by design; see the comment on the ForEach activity.",
         "folder": {
             "name": "00 Master"
         },
@@ -14,8 +14,8 @@
         "parameters": {
             "startYearMonth": {
                 "type": "int",
-                "description": "Inclusive start as YYYYMM, e.g. 202401.",
-                "defaultValue": 202401
+                "description": "Inclusive start as YYYYMM, e.g. 201901.",
+                "defaultValue": 201901
             },
             "endYearMonth": {
                 "type": "int",

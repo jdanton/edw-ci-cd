@@ -1,7 +1,7 @@
 type,name,path,value
 trigger,TR_Monthly_NycTaxi_Load,runtimeState,Stopped
 trigger,TR_Tumbling_NycTaxi_Reprocess,runtimeState,Stopped
-pipeline,PL_Backfill_NycTaxi_Yellow,parameters.startYearMonth.defaultValue,202401
+pipeline,PL_Backfill_NycTaxi_Yellow,parameters.startYearMonth.defaultValue,201901
 pipeline,PL_Backfill_NycTaxi_Yellow,parameters.endYearMonth.defaultValue,202403
 pipeline,PL_Master_NycTaxi_Load,parameters.puYear.defaultValue,2024
 pipeline,PL_Master_NycTaxi_Load,parameters.puMonth.defaultValue,1

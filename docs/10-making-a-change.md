@@ -503,7 +503,7 @@ Merge, and the four pipelines fire on their path filters. Then:
 
 ```bash
 gh workflow run data-backfill.yml \
-  -f environment=dev -f start_year_month=202401 -f end_year_month=202401
+  -f environment=dev -f start_year_month=201901 -f end_year_month=201901
 ```
 
 ### The general shape
