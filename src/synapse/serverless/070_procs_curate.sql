@@ -174,7 +174,10 @@ AS
    lists exactly the columns below. Writing them as columns too made the curated
    Parquet disagree with both the view and stg.YellowTaxiTrip, and the ADF copy
    (which reads the files directly, partition discovery off, mapping by name)
-   failed with "Column 'PickupYear' does not exist in the target table". */
+   failed with: Column PickupYear does not exist in the target table.
+
+   (No apostrophes in this comment. It is emitted inside the dynamic SQL string
+   literal below, so a lone quote here ends that literal.) */
 SELECT
       TripKey
     , VendorId
