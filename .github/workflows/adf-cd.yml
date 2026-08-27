@@ -140,9 +140,19 @@ jobs:
             reason='probe failed - assuming it exists'
             if terraform init -reconfigure -no-color -backend-config="envs/$env/backend.hcl" >/dev/null 2>&1; then
               count=$(terraform state list 2>/dev/null | wc -l | tr -d ' ')
+              # Resources in state is not the same as a usable environment.
+              # A failed apply leaves resources behind but writes no outputs,
+              # and every deploy script starts with
+              # `terraform output -json deployment_config`. Counting resources
+              # called such an environment deployed, so the job ran and died on
+              # `Output "deployment_config" not found` - a red X on every push
+              # for an environment nobody had finished building.
               if [ "$count" = "0" ]; then
                 deployed=false
                 reason='no resources in state - not deployed yet'
+              elif ! terraform output -json deployment_config >/dev/null 2>&1; then
+                deployed=false
+                reason="$count resource(s) in state but no deployment_config output - apply never completed"
               else
                 reason="$count resource(s) in state"
               fi

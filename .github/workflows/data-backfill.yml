@@ -167,7 +167,17 @@ jobs:
             echo "::error::Environment '${{ inputs.environment }}' has no infrastructure - its Terraform state is empty. Run infra-cd for ${{ inputs.environment }} first, then synapse-cd, adf-cd and sql-cd. There is nothing to load data into yet."
             exit 1
           fi
-          echo "${{ inputs.environment }}: $count resource(s) in state."
+
+          # Half-built counts as missing. A failed apply leaves resources in
+          # state but no outputs, and everything downstream reads
+          # deployment_config - so say that here rather than letting it surface
+          # as a terraform error three steps later.
+          if ! terraform output -json deployment_config >/dev/null 2>&1; then
+            echo "::error::Environment '${{ inputs.environment }}' has $count resource(s) in state but publishes no deployment_config output, which means its last infra-cd apply did not complete. Re-run infra-cd for ${{ inputs.environment }} and let it finish before loading data."
+            exit 1
+          fi
+
+          echo "${{ inputs.environment }}: $count resource(s) in state, deployment_config present."
 
       - name: Verify connectivity
         shell: pwsh
