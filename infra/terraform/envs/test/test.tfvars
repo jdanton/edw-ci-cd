@@ -97,3 +97,41 @@ tags = {
 
 # Deployment identity for this environment (bootstrap: deploy_principal_ids).
 deployer_principal_id = "3a900958-36f7-45bc-b000-b37a919fb984"
+
+# ---------------------------------------------------------------------------
+# PRIVATE DNS: SHARED, NOT PER-ENVIRONMENT.
+#
+# A virtual network can hold exactly ONE link per zone namespace. dev creates
+# the nine privatelink zones and links vnet-eastus-1 - the runner - to all of
+# them. When this environment tried to create its own copies and link the same
+# runner, Azure refused:
+#
+#   A virtual network cannot be linked to multiple zones with overlapping
+#   namespaces.
+#
+# and everything that resolves privately failed behind it - the Key Vault
+# data-plane reads in this apply came back as connection timeouts naming the
+# vault, not DNS.
+#
+# So test and prod consume the zones dev created rather than creating their
+# own. Their private endpoints register their own A records in those shared
+# zones, which is what a central connectivity subscription would do - see
+# docs/04-networking.md#central-dns. The zones living in a resource group named
+# for dev is the wart: they are shared infrastructure, and dev happens to have
+# built them first. Moving them to their own resource group is the tidier end
+# state and needs a migration, not an edit.
+# ---------------------------------------------------------------------------
+
+create_private_dns_zones = false
+
+existing_private_dns_zone_ids = {
+  "privatelink.adf.azure.com" = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-edwtaxi-dev-eus-2/providers/Microsoft.Network/privateDnsZones/privatelink.adf.azure.com"
+  "privatelink.azuresynapse.net" = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-edwtaxi-dev-eus-2/providers/Microsoft.Network/privateDnsZones/privatelink.azuresynapse.net"
+  "privatelink.blob.core.windows.net" = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-edwtaxi-dev-eus-2/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  "privatelink.database.windows.net" = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-edwtaxi-dev-eus-2/providers/Microsoft.Network/privateDnsZones/privatelink.database.windows.net"
+  "privatelink.datafactory.azure.net" = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-edwtaxi-dev-eus-2/providers/Microsoft.Network/privateDnsZones/privatelink.datafactory.azure.net"
+  "privatelink.dev.azuresynapse.net" = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-edwtaxi-dev-eus-2/providers/Microsoft.Network/privateDnsZones/privatelink.dev.azuresynapse.net"
+  "privatelink.dfs.core.windows.net" = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-edwtaxi-dev-eus-2/providers/Microsoft.Network/privateDnsZones/privatelink.dfs.core.windows.net"
+  "privatelink.sql.azuresynapse.net" = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-edwtaxi-dev-eus-2/providers/Microsoft.Network/privateDnsZones/privatelink.sql.azuresynapse.net"
+  "privatelink.vaultcore.azure.net" = "/subscriptions/424d0f78-5980-4d31-98ec-624616db8e74/resourceGroups/rg-edwtaxi-dev-eus-2/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+}

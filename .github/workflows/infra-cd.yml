@@ -63,8 +63,104 @@ concurrency:
 
 jobs:
 
+  # ---------------------------------------------------------------------------
+  # Which environments actually exist?
+  #
+  # Here this decides whether an environment may be CREATED, which is a
+  # different question from the one the CD chains ask.
+  #
+  # This workflow is what brings an environment into existence, so it cannot
+  # simply skip what does not exist. But it also should not build a whole
+  # environment as a SIDE EFFECT: an edit to a shared module, pushed to main,
+  # previously walked the promotion chain into test and started creating ~$125 a
+  # month of infrastructure nobody had asked for. It got most of the way before
+  # failing on a private-DNS conflict, leaving a half-built environment behind.
+  #
+  # So a push applies environments that already exist. Creating a new one is a
+  # deliberate act: dispatch this workflow naming that environment.
+  #
+  # This runs as the READ-ONLY CI identity: it needs no `environment:` block,
+  # and its OIDC subject on main is repo:<owner>/<repo>:ref:refs/heads/main,
+  # which bootstrap federates for exactly this kind of job.
+  #
+  # It FAILS OPEN, as everywhere else: an environment counts as existing unless
+  # the backend initialised and the state was positively empty. A probe that
+  # cannot run must never be able to skip an apply to a live environment.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Which environments exist?
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted","Linux","X64","edw"]') }}
+    timeout-minutes: 10
+
+    outputs:
+      dev:  ${{ steps.check.outputs.dev }}
+      test: ${{ steps.check.outputs.test }}
+      prod: ${{ steps.check.outputs.prod }}
+
+    env:
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CI_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CI_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        # A probe that cannot log in must not be able to skip an apply.
+        continue-on-error: true
+
+      - name: Read each environment's state
+        id: check
+        working-directory: infra/terraform
+        run: |
+          set -uo pipefail
+          for env in dev test prod; do
+            deployed=true
+            reason='probe failed - assuming it exists'
+            if terraform init -reconfigure -no-color -backend-config="envs/$env/backend.hcl" >/dev/null 2>&1; then
+              count=$(terraform state list 2>/dev/null | wc -l | tr -d ' ')
+              if [ "$count" = "0" ]; then
+                deployed=false
+                reason='no resources in state - not deployed yet'
+              else
+                reason="$count resource(s) in state"
+              fi
+            fi
+            echo "$env=$deployed" >> "$GITHUB_OUTPUT"
+            printf '%-5s deployed=%-5s (%s)\n' "$env" "$deployed" "$reason"
+          done
+
+      - name: Summary
+        run: |
+          {
+            echo '## Environments'
+            echo
+            echo '| Environment | Deployed |'
+            echo '|---|---|'
+            echo '| dev | ${{ steps.check.outputs.dev }} |'
+            echo '| test | ${{ steps.check.outputs.test }} |'
+            echo '| prod | ${{ steps.check.outputs.prod }} |'
+            echo
+            echo 'An environment with no state is only created when this workflow is dispatched naming it.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   dev:
+    needs: [preflight]
     if: |
+      (
+        needs.preflight.outputs.dev != 'false' ||
+        inputs.environment == 'dev'
+      ) &&
       github.event_name == 'push' ||
       inputs.environment == 'all' ||
       inputs.environment == 'dev'
@@ -79,7 +175,7 @@ jobs:
     # `always()` combined with an explicit result check means "run if dev
     # succeeded OR dev was skipped because the operator asked for test only".
     # Without always(), a skipped dev job would skip this one too.
-    needs: [dev]
+    needs: [dev, preflight]
     # `skipped` is accepted ONLY when the operator explicitly targeted this
     # environment alone. Accepting it unconditionally is what let prod deploy
     # after dev FAILED: dev failed -> test skipped -> prod saw "skipped" and
@@ -89,6 +185,10 @@ jobs:
     # a single-environment dispatch requires the earlier stages to have been
     # skipped, which only happens when they were never selected.
     if: |
+      (
+        needs.preflight.outputs.test != 'false' ||
+        inputs.environment == 'test'
+      ) &&
       always() &&
       (
         ((github.event_name == 'push' || inputs.environment == 'all') &&
@@ -104,7 +204,7 @@ jobs:
     secrets: inherit
 
   prod:
-    needs: [dev, test]
+    needs: [dev, test, preflight]
     # `skipped` is accepted ONLY when the operator explicitly targeted this
     # environment alone. Accepting it unconditionally is what let prod deploy
     # after dev FAILED: dev failed -> test skipped -> prod saw "skipped" and
@@ -114,6 +214,10 @@ jobs:
     # a single-environment dispatch requires the earlier stages to have been
     # skipped, which only happens when they were never selected.
     if: |
+      (
+        needs.preflight.outputs.prod != 'false' ||
+        inputs.environment == 'prod'
+      ) &&
       always() &&
       (
         ((github.event_name == 'push' || inputs.environment == 'all') &&
