@@ -127,6 +127,22 @@ jobs:
             echo "adf_principal_id=$(terraform output -raw data_factory_principal_id)"
           } >> "$GITHUB_OUTPUT"
 
+      # Terraform publishes the ADF identity's OBJECT id; Azure SQL wants its
+      # CLIENT id to build the user's SID. Only the directory can map one to the
+      # other. If that lookup is not permitted, this stays empty and
+      # 040_ServicePrincipals falls back to FROM EXTERNAL PROVIDER.
+      - name: Resolve the Data Factory client id
+        id: adf_identity
+        run: |
+          set -uo pipefail
+          client_id=$(az ad sp show --id "${{ steps.target.outputs.adf_principal_id }}" --query appId -o tsv 2>/dev/null || true)
+          if [ -z "$client_id" ]; then
+            echo "::notice::Could not resolve a client id for ${{ steps.target.outputs.adf_principal_id }}; 040 will use FROM EXTERNAL PROVIDER."
+          else
+            echo "Data Factory client id: $client_id"
+          fi
+          echo "client_id=$client_id" >> "$GITHUB_OUTPUT"
+
       - name: Verify the server is reachable
         shell: pwsh
         run: |
@@ -206,7 +222,7 @@ jobs:
             /AccessToken:"${{ steps.token.outputs.value }}" \
             /OutputPath:"deployreport-${{ inputs.environment }}.xml" \
             /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
-            /v:DataFactoryPrincipalId="${{ steps.target.outputs.adf_principal_id }}" \
+            /v:DataFactoryClientId="${{ steps.adf_identity.outputs.client_id }}" \
             /v:EnvironmentName="${{ inputs.environment }}" \
             /v:DimDateStartYear=2009 \
             /v:DimDateEndYear=2035
@@ -274,7 +290,7 @@ jobs:
             /AccessToken:"${{ steps.token.outputs.value }}" \
             /OutputPath:"deployscript-${{ inputs.environment }}.sql" \
             /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
-            /v:DataFactoryPrincipalId="${{ steps.target.outputs.adf_principal_id }}" \
+            /v:DataFactoryClientId="${{ steps.adf_identity.outputs.client_id }}" \
             /v:EnvironmentName="${{ inputs.environment }}" \
             /v:DimDateStartYear=2009 \
             /v:DimDateEndYear=2035
@@ -301,7 +317,7 @@ jobs:
             /TargetDatabaseName:"${{ steps.target.outputs.database }}" \
             /AccessToken:"${{ steps.token.outputs.value }}" \
             /v:DataFactoryName="${{ steps.target.outputs.adf_name }}" \
-            /v:DataFactoryPrincipalId="${{ steps.target.outputs.adf_principal_id }}" \
+            /v:DataFactoryClientId="${{ steps.adf_identity.outputs.client_id }}" \
             /v:EnvironmentName="${{ inputs.environment }}" \
             /v:DimDateStartYear=2009 \
             /v:DimDateEndYear=2035 \

@@ -90,13 +90,15 @@
       <Value>$(SqlCmdVar__DataFactoryName)</Value>
     </SqlCmdVariable>
 
-    <!-- Object ID of the Data Factory managed identity. Lets 040_ServicePrincipals
-         create the contained user BY SID, which needs no Microsoft Graph lookup and
-         therefore no Entra Directory Readers role on the server identity. Empty by
-         default: the script falls back to FROM EXTERNAL PROVIDER when it is absent. -->
-    <SqlCmdVariable Include="DataFactoryPrincipalId">
+    <!-- APPLICATION (client) id of the Data Factory managed identity - not its
+         object id. Azure SQL derives a service principal's SID from the client id,
+         so a user created from the object id exists under the right name and fails
+         every login. Lets 040_ServicePrincipals create the user without a Graph
+         lookup, and therefore without Directory Readers on the server identity.
+         Empty by default: the script falls back to FROM EXTERNAL PROVIDER. -->
+    <SqlCmdVariable Include="DataFactoryClientId">
       <DefaultValue></DefaultValue>
-      <Value>$(SqlCmdVar__DataFactoryPrincipalId)</Value>
+      <Value>$(SqlCmdVar__DataFactoryClientId)</Value>
     </SqlCmdVariable>
 
     <SqlCmdVariable Include="EnvironmentName">

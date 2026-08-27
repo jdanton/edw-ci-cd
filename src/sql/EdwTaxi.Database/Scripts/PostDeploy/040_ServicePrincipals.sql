@@ -45,7 +45,12 @@ GO
 /* Dynamic SQL because CREATE USER does not accept a variable for the principal
    name, and because $(DataFactoryName) must be quoted as an identifier. */
 DECLARE @principal SYSNAME       = N'$(DataFactoryName)';
-DECLARE @objectId  NVARCHAR(64)   = N'$(DataFactoryPrincipalId)';
+/* The CLIENT id, not the object id. For an Entra service principal - which a
+   managed identity is - Azure SQL derives the user's SID from the APPLICATION
+   (client) id. The object id is a different GUID entirely, and a user created
+   from it is a user no token will ever match: it exists, it has the right name,
+   and every login fails. */
+DECLARE @clientId  NVARCHAR(64)   = N'$(DataFactoryClientId)';
 DECLARE @sql       NVARCHAR(MAX);
 DECLARE @sid       VARBINARY(16);
 
@@ -53,7 +58,29 @@ IF @principal IS NULL OR LTRIM(RTRIM(@principal)) = ''
 BEGIN
     RAISERROR('SQLCMD variable DataFactoryName is empty. Pass it with sqlpackage /v:DataFactoryName=<name>.', 16, 1);
 END
-ELSE IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = @principal)
+ELSE
+BEGIN
+    IF @clientId IS NOT NULL AND LTRIM(RTRIM(@clientId)) <> ''
+       AND TRY_CAST(@clientId AS UNIQUEIDENTIFIER) IS NOT NULL
+        SET @sid = CAST(CAST(@clientId AS UNIQUEIDENTIFIER) AS VARBINARY(16));
+
+    /* A user whose SID does not match the identity is worse than no user: the
+       name looks right, the verification below passes, and every ADF activity
+       fails with "Login failed for user '<token-identified principal>'" -
+       which reads as a permissions problem rather than a wrong SID. Drop it and
+       let it be recreated correctly. */
+    IF @sid IS NOT NULL
+       AND EXISTS (SELECT 1 FROM sys.database_principals
+                   WHERE name = @principal AND type IN ('E','X') AND sid <> @sid)
+    BEGIN
+        PRINT CONCAT('  [', @principal, '] exists with a different SID - recreating.');
+        SET @sql = N'DROP USER ' + QUOTENAME(@principal) + N';';
+        EXEC sp_executesql @sql;
+    END
+END
+
+IF @principal IS NOT NULL AND LTRIM(RTRIM(@principal)) <> ''
+   AND NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = @principal)
 BEGIN
     BEGIN TRY
         /* -------------------------------------------------------------------
@@ -74,16 +101,14 @@ BEGIN
            uniqueidentifier to varbinary(16) produces. Supplying it directly
            needs no directory read at all.
 
-           Terraform already knows the value (output data_factory_principal_id);
-           _sql-publish.yml passes it as /v:DataFactoryPrincipalId. When it is
-           absent - a hand-run sqlpackage, an older pipeline - this falls back
-           to the Graph path, so nothing that worked before stops working.
+           _sql-publish.yml resolves it with `az ad sp show --id <principal id>
+           --query appId`, because Terraform publishes the ADF identity's OBJECT
+           id and this needs its CLIENT id. When it cannot be resolved - no
+           directory read, a hand-run sqlpackage - this falls back to the Graph
+           path, so nothing that worked before stops working.
            ------------------------------------------------------------------- */
-        IF @objectId IS NOT NULL AND LTRIM(RTRIM(@objectId)) <> ''
-           AND TRY_CAST(@objectId AS UNIQUEIDENTIFIER) IS NOT NULL
+        IF @sid IS NOT NULL
         BEGIN
-            SET @sid = CAST(CAST(@objectId AS UNIQUEIDENTIFIER) AS VARBINARY(16));
-
             PRINT CONCAT('  Creating database user [', @principal, '] by SID (no Graph lookup)...');
 
             SET @sql = N'CREATE USER ' + QUOTENAME(@principal) +
@@ -112,7 +137,7 @@ BEGIN
         PRINT '  *    Entra token. FROM EXTERNAL PROVIDER requires Entra.';
         PRINT '  *  - The name in $(DataFactoryName) does not match the';
         PRINT '  *    factory resource name.';
-        PRINT '  *  - $(DataFactoryPrincipalId) was not supplied, so this fell';
+        PRINT '  *  - $(DataFactoryClientId) was not supplied, so this fell';
         PRINT '  *    back to Graph resolution, and the SERVER identity lacks';
         PRINT '  *    the Entra Directory Readers role.';
         PRINT '  *';
